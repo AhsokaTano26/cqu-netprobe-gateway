@@ -100,18 +100,57 @@ func finite(v float64) bool {
 	return !math.IsNaN(v) && !math.IsInf(v, 0)
 }
 
-// NOTE (Task 4/Task 5 boundary): the two functions below are placeholders. Task
-// 5 replaces them with the real Protocol v1 §10 and §11 implementations, which
-// its brief appends to this file. They exist here only so validateMeasurement
-// compiles and the package builds; they fail closed, so a DNS or HTTP
-// measurement can never pass validation by omission in the meantime.
-//
-// Task 5: delete both stubs, then paste the real implementations in their place.
-
+// validateDNS enforces Protocol v1 §10.
 func validateDNS(m *DNSResult) error {
-	return newError(CodeInvalidPayload, "dns measurement validation is not implemented yet")
+	if m.Success {
+		if m.DurationMS == nil {
+			return newError(CodeInvalidPayload, "dns duration is required on success")
+		}
+		if !finite(*m.DurationMS) {
+			return newError(CodeInvalidPayload, "dns duration must be a finite number")
+		}
+		if *m.DurationMS < 0 {
+			return newError(CodeInvalidPayload, "dns duration must not be negative")
+		}
+		return nil
+	}
+	// Protocol v1 §10: failure carries no duration at all, and v1 never
+	// transports a DNS error string.
+	if m.DurationMS != nil {
+		return newError(CodeInvalidPayload, "dns duration must be null on failure")
+	}
+	return nil
 }
 
+// validateHTTP enforces Protocol v1 §11.
 func validateHTTP(m *HTTPResult) error {
-	return newError(CodeInvalidPayload, "http measurement validation is not implemented yet")
+	// No HTTP response at all: both fields must be null.
+	if m.StatusCode == nil && m.DurationMS == nil {
+		if m.Success {
+			return newError(CodeInvalidPayload, "http success cannot be true without a response")
+		}
+		return nil
+	}
+
+	// A response arrived, so both fields are required.
+	if m.StatusCode == nil || m.DurationMS == nil {
+		return newError(CodeInvalidPayload, "http status_code and duration_ms must both be set or both be null")
+	}
+	code := *m.StatusCode
+	if code < 100 || code > 599 {
+		return newError(CodeInvalidPayload, "http status_code must be between 100 and 599")
+	}
+	if !finite(*m.DurationMS) {
+		return newError(CodeInvalidPayload, "http duration must be a finite number")
+	}
+	if *m.DurationMS < 0 {
+		return newError(CodeInvalidPayload, "http duration must not be negative")
+	}
+
+	// Protocol v1 §11 fixes the mapping: 200 <= code < 400 means success.
+	wantSuccess := code >= 200 && code < 400
+	if m.Success != wantSuccess {
+		return newError(CodeInvalidPayload, "http success does not match status_code")
+	}
+	return nil
 }
