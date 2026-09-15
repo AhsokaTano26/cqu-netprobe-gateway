@@ -1,0 +1,500 @@
+package admin
+
+import (
+	"net/http"
+	"net/url"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/tano/cqu-netprobe-gateway/internal/protocol"
+	"github.com/tano/cqu-netprobe-gateway/internal/store"
+	"github.com/tano/cqu-netprobe-gateway/internal/token"
+)
+
+// csrfFrom extracts the CSRF token from a rendered page.
+func csrfFrom(t *testing.T, html string) string {
+	t.Helper()
+	re := regexp.MustCompile(`name="csrf" value="([^"]+)"`)
+	m := re.FindStringSubmatch(html)
+	if m == nil {
+		t.Fatalf("no csrf token found in page")
+	}
+	return m[1]
+}
+
+func validProbeForm(csrf string) url.Values {
+	return url.Values{
+		"csrf":                {csrf},
+		"campus_code":         {"hx"},
+		"campus_name":         {"虎溪"},
+		"building_group_code": {"sy"},
+		"building_group_name": {"松园"},
+		"building_code":       {"sy01"},
+		"building_name":       {"松园一栋"},
+		"network_type":        {"wired"},
+		"description":         {"测试探针"},
+	}
+}
+
+var (
+	probeIDPattern    = regexp.MustCompile(`hx-sy01-[0-9a-f]{6}`)
+	probeTokenPattern = regexp.MustCompile(`cqu_probe_[A-Za-z0-9_-]{43}`)
+)
+
+// createProbe drives the create flow and returns the probe ID and its token
+// page URL.
+func (h *adminHarness) createProbe(t *testing.T, cookie *http.Cookie) (id, tokenURL string) {
+	t.Helper()
+	page := h.get(t, "/admin/probes/new", cookie)
+	csrf := csrfFrom(t, page.Body.String())
+	rec := h.post(t, "/admin/probes/new", validProbeForm(csrf), cookie)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("create status = %d, want 303; body = %s", rec.Code, rec.Body.String())
+	}
+	loc := rec.Header().Get("Location")
+	tokPage := h.get(t, loc, cookie)
+	id = probeIDPattern.FindString(tokPage.Body.String())
+	if id == "" {
+		t.Fatalf("no probe ID on the token page: %s", tokPage.Body.String())
+	}
+	return id, loc
+}
+
+func TestProbeCreateShowsTokenOnce(t *testing.T) {
+	h := newAdminHarness(t, "test-password-value")
+	cookie := h.login(t)
+
+	listPage := h.get(t, "/admin/probes/new", cookie)
+	csrf := csrfFrom(t, listPage.Body.String())
+
+	rec := h.post(t, "/admin/probes/new", validProbeForm(csrf), cookie)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("create status = %d, want 303; body = %s", rec.Code, rec.Body.String())
+	}
+	loc := rec.Header().Get("Location")
+	if len(loc) < len("/admin/token/") {
+		t.Fatalf("Location = %q, want /admin/token/{slot}", loc)
+	}
+
+	// First visit shows the token.
+	first := h.get(t, loc, cookie)
+	if first.Code != http.StatusOK {
+		t.Fatalf("token page status = %d, want 200", first.Code)
+	}
+	body := first.Body.String()
+	if !regexp.MustCompile(`cqu_probe_[A-Za-z0-9_-]{43}`).MatchString(body) {
+		t.Fatal("token page does not contain a token")
+	}
+	if !regexp.MustCompile(`hx-sy01-[0-9a-f]{6}`).MatchString(body) {
+		t.Fatal("token page does not contain a probe ID")
+	}
+
+	// Second visit must not: the slot was consumed.
+	second := h.get(t, loc, cookie)
+	if second.Code == http.StatusOK && regexp.MustCompile(`cqu_probe_[A-Za-z0-9_-]{43}`).MatchString(second.Body.String()) {
+		t.Fatal("token was displayed twice; it must be shown exactly once")
+	}
+}
+
+func TestProbeCreateStoresHashNotPlaintext(t *testing.T) {
+	h := newAdminHarness(t, "test-password-value")
+	cookie := h.login(t)
+
+	page := h.get(t, "/admin/probes/new", cookie)
+	csrf := csrfFrom(t, page.Body.String())
+	rec := h.post(t, "/admin/probes/new", validProbeForm(csrf), cookie)
+	loc := rec.Header().Get("Location")
+
+	tokPage := h.get(t, loc, cookie)
+	m := regexp.MustCompile(`cqu_probe_[A-Za-z0-9_-]{43}`).FindString(tokPage.Body.String())
+	if m == "" {
+		t.Fatal("no token on the token page")
+	}
+	idMatch := regexp.MustCompile(`hx-sy01-[0-9a-f]{6}`).FindString(tokPage.Body.String())
+
+	got, err := h.store.GetProbe(idMatch)
+	if err != nil {
+		t.Fatalf("GetProbe() error = %v", err)
+	}
+	if got.TokenHash != token.Hash(m) {
+		t.Error("stored hash does not match the displayed token")
+	}
+	if got.TokenHash == m {
+		t.Fatal("the database stored the plaintext token")
+	}
+	if got.CampusName != "虎溪" || got.BuildingGroupName != "松园" {
+		t.Errorf("display names not stored: %+v", got)
+	}
+}
+
+func TestProbeCreateRejectsBadCode(t *testing.T) {
+	h := newAdminHarness(t, "test-password-value")
+	cookie := h.login(t)
+	page := h.get(t, "/admin/probes/new", cookie)
+	csrf := csrfFrom(t, page.Body.String())
+
+	cases := map[string]string{
+		"uppercase": "HX",
+		"spaces":    "h x",
+		"chinese":   "虎溪",
+		"dash":      "h-x",
+		"empty":     "",
+		"too long":  "aaaaaaaaaaaaaaaaaaaaa",
+	}
+	for name, code := range cases {
+		t.Run(name, func(t *testing.T) {
+			form := validProbeForm(csrf)
+			form.Set("campus_code", code)
+			rec := h.post(t, "/admin/probes/new", form, cookie)
+			if rec.Code == http.StatusSeeOther {
+				t.Fatalf("bad campus_code %q was accepted", code)
+			}
+		})
+	}
+}
+
+func TestProbeCreateRejectsBadNetworkType(t *testing.T) {
+	h := newAdminHarness(t, "test-password-value")
+	cookie := h.login(t)
+	page := h.get(t, "/admin/probes/new", cookie)
+	csrf := csrfFrom(t, page.Body.String())
+
+	form := validProbeForm(csrf)
+	form.Set("network_type", "satellite")
+	rec := h.post(t, "/admin/probes/new", form, cookie)
+	if rec.Code == http.StatusSeeOther {
+		t.Fatal("network_type outside the enum was accepted")
+	}
+}
+
+func TestProbeListRendersCreatedProbe(t *testing.T) {
+	h := newAdminHarness(t, "test-password-value")
+	cookie := h.login(t)
+	page := h.get(t, "/admin/probes/new", cookie)
+	csrf := csrfFrom(t, page.Body.String())
+	rec := h.post(t, "/admin/probes/new", validProbeForm(csrf), cookie)
+	tokPage := h.get(t, rec.Header().Get("Location"), cookie)
+	idMatch := regexp.MustCompile(`hx-sy01-[0-9a-f]{6}`).FindString(tokPage.Body.String())
+
+	list := h.get(t, "/admin", cookie)
+	body := list.Body.String()
+	if !regexp.MustCompile(idMatch).MatchString(body) {
+		t.Errorf("probe %s not shown in the list", idMatch)
+	}
+	for _, want := range []string{"虎溪", "松园", "松园一栋", "wired"} {
+		if !regexp.MustCompile(want).MatchString(body) {
+			t.Errorf("list does not show %q", want)
+		}
+	}
+}
+
+func TestProbeToggle(t *testing.T) {
+	h := newAdminHarness(t, "test-password-value")
+	cookie := h.login(t)
+	page := h.get(t, "/admin/probes/new", cookie)
+	csrf := csrfFrom(t, page.Body.String())
+	rec := h.post(t, "/admin/probes/new", validProbeForm(csrf), cookie)
+	tokPage := h.get(t, rec.Header().Get("Location"), cookie)
+	id := regexp.MustCompile(`hx-sy01-[0-9a-f]{6}`).FindString(tokPage.Body.String())
+
+	form := url.Values{"csrf": {csrf}}
+	if r := h.post(t, "/admin/probes/"+id+"/toggle", form, cookie); r.Code != http.StatusSeeOther {
+		t.Fatalf("toggle status = %d, want 303", r.Code)
+	}
+
+	got, err := h.store.GetProbe(id)
+	if err != nil {
+		t.Fatalf("GetProbe() error = %v", err)
+	}
+	if got.Enabled {
+		t.Error("probe is still enabled after toggle")
+	}
+
+	if r := h.post(t, "/admin/probes/"+id+"/toggle", form, cookie); r.Code != http.StatusSeeOther {
+		t.Fatalf("second toggle status = %d", r.Code)
+	}
+	got, _ = h.store.GetProbe(id)
+	if !got.Enabled {
+		t.Error("probe is still disabled after a second toggle")
+	}
+}
+
+func TestProbeRotateKeepsIDAndRevokesOldToken(t *testing.T) {
+	h := newAdminHarness(t, "test-password-value")
+	cookie := h.login(t)
+	page := h.get(t, "/admin/probes/new", cookie)
+	csrf := csrfFrom(t, page.Body.String())
+	rec := h.post(t, "/admin/probes/new", validProbeForm(csrf), cookie)
+
+	tokPage := h.get(t, rec.Header().Get("Location"), cookie)
+	firstToken := regexp.MustCompile(`cqu_probe_[A-Za-z0-9_-]{43}`).FindString(tokPage.Body.String())
+	id := regexp.MustCompile(`hx-sy01-[0-9a-f]{6}`).FindString(tokPage.Body.String())
+
+	rot := h.post(t, "/admin/probes/"+id+"/rotate", url.Values{"csrf": {csrf}}, cookie)
+	if rot.Code != http.StatusSeeOther {
+		t.Fatalf("rotate status = %d, want 303", rot.Code)
+	}
+
+	rotPage := h.get(t, rot.Header().Get("Location"), cookie)
+	newToken := regexp.MustCompile(`cqu_probe_[A-Za-z0-9_-]{43}`).FindString(rotPage.Body.String())
+	if newToken == firstToken {
+		t.Fatal("rotation produced the same token")
+	}
+	if !regexp.MustCompile(id).MatchString(rotPage.Body.String()) {
+		t.Fatal("rotation changed the probe ID")
+	}
+
+	// The old token must no longer resolve.
+	if _, err := h.store.ProbeByTokenHash(token.Hash(firstToken)); err == nil {
+		t.Fatal("the old token still authenticates after rotation")
+	}
+	if _, err := h.store.ProbeByTokenHash(token.Hash(newToken)); err != nil {
+		t.Fatalf("the new token does not authenticate: %v", err)
+	}
+}
+
+func TestProbeDelete(t *testing.T) {
+	h := newAdminHarness(t, "test-password-value")
+	cookie := h.login(t)
+	page := h.get(t, "/admin/probes/new", cookie)
+	csrf := csrfFrom(t, page.Body.String())
+	rec := h.post(t, "/admin/probes/new", validProbeForm(csrf), cookie)
+	tokPage := h.get(t, rec.Header().Get("Location"), cookie)
+	id := regexp.MustCompile(`hx-sy01-[0-9a-f]{6}`).FindString(tokPage.Body.String())
+
+	del := h.post(t, "/admin/probes/"+id+"/delete", url.Values{"csrf": {csrf}}, cookie)
+	if del.Code != http.StatusSeeOther {
+		t.Fatalf("delete status = %d, want 303", del.Code)
+	}
+	if _, err := h.store.GetProbe(id); err == nil {
+		t.Fatal("probe still exists after delete")
+	}
+}
+
+func TestProbeDetailNotFound(t *testing.T) {
+	h := newAdminHarness(t, "test-password-value")
+	cookie := h.login(t)
+	rec := h.get(t, "/admin/probes/hx-sy01-ffffff", cookie)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestProbeTokenPageRequiresAuth(t *testing.T) {
+	h := newAdminHarness(t, "test-password-value")
+	rec := h.get(t, "/admin/token/any-slot", nil)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("status = %d, want a redirect to login", rec.Code)
+	}
+}
+
+func TestValidCode(t *testing.T) {
+	valid := []string{"hx", "sy01", "songyuan_1", "a", "abc123", "abcdefghijklmnop"}
+	for _, c := range valid {
+		if !validCode(c) {
+			t.Errorf("validCode(%q) = false, want true", c)
+		}
+	}
+	invalid := []string{"", "HX", "h-x", "h x", "虎溪", "abc123def456ghi789", "h.x"}
+	for _, c := range invalid {
+		if validCode(c) {
+			t.Errorf("validCode(%q) = true, want false", c)
+		}
+	}
+}
+
+// TestProbeTokenPageIgnoresForgedProbeIDQuery pins the probe ID to the
+// server-side one-shot slot: a crafted ?probe_id= must not relabel a real token.
+func TestProbeTokenPageIgnoresForgedProbeIDQuery(t *testing.T) {
+	h := newAdminHarness(t, "test-password-value")
+	cookie := h.login(t)
+	page := h.get(t, "/admin/probes/new", cookie)
+	csrf := csrfFrom(t, page.Body.String())
+	rec := h.post(t, "/admin/probes/new", validProbeForm(csrf), cookie)
+	loc := rec.Header().Get("Location")
+
+	// This is the slot's only redemption, so the forged query parameter is
+	// present at the one render that carries a real token.
+	got := h.get(t, loc+"?probe_id=hx-sy01-ffffff", cookie)
+	if got.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", got.Code)
+	}
+	body := got.Body.String()
+
+	probes, err := h.store.ListProbes()
+	if err != nil || len(probes) != 1 {
+		t.Fatalf("ListProbes() = %d probes, %v; want exactly 1", len(probes), err)
+	}
+	if !strings.Contains(body, probes[0].ProbeID) {
+		t.Errorf("token page does not show the real probe ID %s", probes[0].ProbeID)
+	}
+	if strings.Contains(body, "hx-sy01-ffffff") {
+		t.Error("the forged ?probe_id was rendered beside a real token")
+	}
+	if !probeTokenPattern.MatchString(body) {
+		t.Error("the token itself is missing from the page")
+	}
+}
+
+// TestProbeValidationErrorRendersForm: a rejected create must re-render the form
+// with the submitted values, not an opaque error page.
+func TestProbeValidationErrorRendersForm(t *testing.T) {
+	h := newAdminHarness(t, "test-password-value")
+	cookie := h.login(t)
+	page := h.get(t, "/admin/probes/new", cookie)
+	csrf := csrfFrom(t, page.Body.String())
+
+	form := validProbeForm(csrf)
+	form.Set("campus_code", "HX")
+	rec := h.post(t, "/admin/probes/new", form, cookie)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `value="HX"`) {
+		t.Error("the rejected form values were not preserved")
+	}
+	if !strings.Contains(body, `name="csrf"`) {
+		t.Error("the re-rendered form has no csrf field")
+	}
+}
+
+// TestProbeDisableAndDeleteClearInMemoryState covers the in-memory cleanup: a
+// disabled probe must not keep a rate-limit bucket or a stale measurement that
+// would make it look online the instant it is re-enabled.
+func TestProbeDisableAndDeleteClearInMemoryState(t *testing.T) {
+	h := newAdminHarness(t, "test-password-value")
+	cookie := h.login(t)
+	page := h.get(t, "/admin/probes/new", cookie)
+	csrf := csrfFrom(t, page.Body.String())
+	rec := h.post(t, "/admin/probes/new", validProbeForm(csrf), cookie)
+	id := probeIDPattern.FindString(h.get(t, rec.Header().Get("Location"), cookie).Body.String())
+	form := url.Values{"csrf": {csrf}}
+
+	// Disabling clears both the bucket and the measurement.
+	h.latest.Put(id, protocol.Results{}, h.now)
+	if r := h.post(t, "/admin/probes/"+id+"/toggle", form, cookie); r.Code != http.StatusSeeOther {
+		t.Fatalf("disable status = %d, want 303", r.Code)
+	}
+	if _, ok := h.latest.Get(id); ok {
+		t.Error("disabling a probe left its measurement in place")
+	}
+	if got := h.limiter.count(id); got != 1 {
+		t.Errorf("limiter.Remove called %d times on disable, want 1", got)
+	}
+
+	// Re-enabling must not clear anything: the probe is live again and any
+	// measurement that arrives from here on is its own.
+	h.latest.Put(id, protocol.Results{}, h.now)
+	if r := h.post(t, "/admin/probes/"+id+"/toggle", form, cookie); r.Code != http.StatusSeeOther {
+		t.Fatalf("re-enable status = %d, want 303", r.Code)
+	}
+	if _, ok := h.latest.Get(id); !ok {
+		t.Error("re-enabling a probe dropped its measurement")
+	}
+
+	// Deleting clears both, unconditionally.
+	if r := h.post(t, "/admin/probes/"+id+"/delete", form, cookie); r.Code != http.StatusSeeOther {
+		t.Fatalf("delete status = %d, want 303", r.Code)
+	}
+	if _, ok := h.latest.Get(id); ok {
+		t.Error("deleting a probe left its measurement in place")
+	}
+	if got := h.limiter.count(id); got != 2 {
+		t.Errorf("limiter.Remove called %d times in total, want 2", got)
+	}
+}
+
+// TestProbeListOnlineState mirrors the metrics collector's rule: a measurement
+// inside the online threshold is Online, one outside it is Offline.
+func TestProbeListOnlineState(t *testing.T) {
+	h := newAdminHarness(t, "test-password-value")
+	cookie := h.login(t)
+	id, _ := h.createProbe(t, cookie)
+
+	h.latest.Put(id, protocol.Results{}, h.now.Add(-29*time.Second))
+	body := h.get(t, "/admin", cookie).Body.String()
+	if !strings.Contains(body, "Online") {
+		t.Error("a fresh measurement did not render as Online")
+	}
+	// The list's per-row toggle form must carry the CSRF token, not just the
+	// create form the other tests scrape theirs from.
+	if !strings.Contains(body, `name="csrf" value="`) {
+		t.Error("the list page's toggle forms have no csrf field")
+	}
+
+	h.latest.Put(id, protocol.Results{}, h.now.Add(-31*time.Second))
+	if body := h.get(t, "/admin", cookie).Body.String(); strings.Contains(body, "Online") {
+		t.Error("a stale measurement rendered as Online")
+	}
+}
+
+// TestProbeCreateRetriesOnIDCollision: a colliding ID must be retried, not
+// reported to the operator as an error they cannot act on.
+func TestProbeCreateRetriesOnIDCollision(t *testing.T) {
+	h := newAdminHarness(t, "test-password-value")
+	cookie := h.login(t)
+
+	taken := "hx-sy01-abcdef"
+	if err := h.store.CreateProbe(&store.Probe{
+		ProbeID:   taken,
+		TokenHash: token.Hash("seed-token"),
+		Enabled:   true,
+	}); err != nil {
+		t.Fatalf("seeding the colliding probe failed: %v", err)
+	}
+
+	// Hand out the taken ID once, then fall back to the real generator.
+	original := probeIDSource
+	defer func() { probeIDSource = original }()
+	calls := 0
+	probeIDSource = func(campusCode, buildingCode string) (string, error) {
+		calls++
+		if calls == 1 {
+			return taken, nil
+		}
+		return original(campusCode, buildingCode)
+	}
+
+	page := h.get(t, "/admin/probes/new", cookie)
+	csrf := csrfFrom(t, page.Body.String())
+	rec := h.post(t, "/admin/probes/new", validProbeForm(csrf), cookie)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("create status = %d, want 303 after retrying a colliding ID; body = %s",
+			rec.Code, rec.Body.String())
+	}
+	if calls != 2 {
+		t.Errorf("generateProbeID called %d times, want 2 (one collision, one success)", calls)
+	}
+	probes, err := h.store.ListProbes()
+	if err != nil {
+		t.Fatalf("ListProbes() error = %v", err)
+	}
+	if len(probes) != 2 {
+		t.Errorf("store holds %d probes, want 2", len(probes))
+	}
+}
+
+// TestProbeDetailRendersProbe: the detail template is the one page a viewer
+// reaches by hand, so a typo in it must not ship silently as a 500.
+func TestProbeDetailRendersProbe(t *testing.T) {
+	h := newAdminHarness(t, "test-password-value")
+	cookie := h.login(t)
+	id, _ := h.createProbe(t, cookie)
+
+	rec := h.get(t, "/admin/probes/"+id, cookie)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{id, "虎溪", "松园", "松园一栋", "wired", "测试探针", "轮换 Token"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("detail page does not show %q", want)
+		}
+	}
+	if !strings.Contains(body, `name="csrf" value="`) {
+		t.Error("the detail page's action forms have no csrf field")
+	}
+}

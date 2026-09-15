@@ -128,7 +128,12 @@ type oneShotStore struct {
 	now   func() time.Time
 }
 
+// oneShot is one pending render: the secret to display and the probe it belongs
+// to. The probe ID travels with the secret because the token page has to name
+// the probe it is handing a credential to, and a query parameter would let a
+// crafted link put an arbitrary ID beside a real token.
 type oneShot struct {
+	probeID string
 	value   string
 	expires time.Time
 }
@@ -139,6 +144,11 @@ func newOneShotStore(ttl time.Duration, now func() time.Time) *oneShotStore {
 
 // put stores a value and returns the slot key used to redeem it.
 func (o *oneShotStore) put(value string) (string, error) {
+	return o.putPair("", value)
+}
+
+// putPair stores a token together with its probe ID.
+func (o *oneShotStore) putPair(probeID, value string) (string, error) {
 	slot, err := randomString(32)
 	if err != nil {
 		return "", err
@@ -152,25 +162,32 @@ func (o *oneShotStore) put(value string) (string, error) {
 			delete(o.slots, k)
 		}
 	}
-	o.slots[slot] = oneShot{value: value, expires: now.Add(o.ttl)}
+	o.slots[slot] = oneShot{probeID: probeID, value: value, expires: now.Add(o.ttl)}
 	return slot, nil
 }
 
 // take redeems a slot, deleting it in the same critical section so two
 // concurrent requests cannot both receive the token.
 func (o *oneShotStore) take(slot string) (string, bool) {
+	_, value, ok := o.takePair(slot)
+	return value, ok
+}
+
+// takePair redeems both halves of a slot. The delete happens in the same
+// critical section as the read, so exactly one caller can win.
+func (o *oneShotStore) takePair(slot string) (string, string, bool) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
 	v, ok := o.slots[slot]
 	if !ok {
-		return "", false
+		return "", "", false
 	}
 	delete(o.slots, slot)
 	if o.now().After(v.expires) {
-		return "", false
+		return "", "", false
 	}
-	return v.value, true
+	return v.probeID, v.value, true
 }
 
 // randomString returns n cryptographically random bytes, base64url encoded.

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/tano/cqu-netprobe-gateway/internal/config"
+	"github.com/tano/cqu-netprobe-gateway/internal/latest"
 	"github.com/tano/cqu-netprobe-gateway/internal/store"
 )
 
@@ -16,23 +17,40 @@ const sessionCookieName = "netprobe_admin_session"
 // gateway-generated admin password.
 const adminPasswordSettingKey = "admin_password_hash"
 
+// defaultOnlineThreshold is how recently a probe must have pushed to count as
+// online. It matches the metrics collector's window so the UI and /metrics
+// never disagree.
+const defaultOnlineThreshold = 30 * time.Second
+
+// Limiter drops per-probe state when a probe is deleted or disabled. It is
+// declared here as a one-method interface so this package does not import api.
+type Limiter interface {
+	Remove(probeID string)
+}
+
 // Deps are the admin server's collaborators.
 type Deps struct {
-	Store  *store.Store
-	Config *config.Config
-	Logger *slog.Logger
-	Now    func() time.Time
+	Store           *store.Store
+	Config          *config.Config
+	Logger          *slog.Logger
+	Now             func() time.Time
+	Latest          *latest.Store
+	Limiter         Limiter
+	OnlineThreshold time.Duration
 }
 
 // Server renders the management interface.
 type Server struct {
-	store     *store.Store
-	cfg       *config.Config
-	logger    *slog.Logger
-	now       func() time.Time
-	sessions  *sessionStore
-	oneShot   *oneShotStore
-	templates pageTemplates
+	store           *store.Store
+	cfg             *config.Config
+	logger          *slog.Logger
+	now             func() time.Time
+	sessions        *sessionStore
+	oneShot         *oneShotStore
+	templates       pageTemplates
+	latest          *latest.Store
+	limiter         Limiter
+	onlineThreshold time.Duration
 
 	username string
 	// passwordHash is the bcrypt hash the login handler compares against.
@@ -62,6 +80,10 @@ func NewServer(d Deps) (*Server, error) {
 	if now == nil {
 		now = time.Now
 	}
+	onlineThreshold := d.OnlineThreshold
+	if onlineThreshold <= 0 {
+		onlineThreshold = defaultOnlineThreshold
+	}
 
 	tmpl, err := parseTemplates()
 	if err != nil {
@@ -69,14 +91,17 @@ func NewServer(d Deps) (*Server, error) {
 	}
 
 	s := &Server{
-		store:     d.Store,
-		cfg:       d.Config,
-		logger:    logger,
-		now:       now,
-		sessions:  newSessionStore(sessionTTL, now),
-		oneShot:   newOneShotStore(oneShotTTL, now),
-		templates: tmpl,
-		username:  d.Config.AdminUsername,
+		store:           d.Store,
+		cfg:             d.Config,
+		logger:          logger,
+		now:             now,
+		sessions:        newSessionStore(sessionTTL, now),
+		oneShot:         newOneShotStore(oneShotTTL, now),
+		templates:       tmpl,
+		latest:          d.Latest,
+		limiter:         d.Limiter,
+		onlineThreshold: onlineThreshold,
+		username:        d.Config.AdminUsername,
 	}
 
 	if err := s.resolvePassword(); err != nil {
@@ -125,8 +150,8 @@ func (s *Server) PasswordGeneration() (string, bool) {
 
 // Routes returns the admin mux with the routes this task implements.
 //
-// Probe routes are appended by Task 17 and target routes by Task 18, so that
-// each task leaves the package compiling and its own tests passing.
+// Target routes are appended by Task 18, so that each task leaves the package
+// compiling and its own tests passing.
 func (s *Server) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
 
@@ -134,6 +159,16 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.Handle("POST /admin/login", http.HandlerFunc(s.handleLogin))
 	mux.Handle("POST /admin/logout", s.requireSession(http.HandlerFunc(s.handleLogout)))
 	mux.Handle("GET /admin/static/", staticHandler())
+
+	// Probe management (added by Task 17).
+	mux.Handle("GET /admin", s.requireSession(http.HandlerFunc(s.handleProbeList)))
+	mux.Handle("GET /admin/probes/new", s.requireSession(http.HandlerFunc(s.handleProbeNewForm)))
+	mux.Handle("POST /admin/probes/new", s.requireSession(s.requireCSRF(http.HandlerFunc(s.handleProbeCreate))))
+	mux.Handle("GET /admin/probes/{id}", s.requireSession(http.HandlerFunc(s.handleProbeDetail)))
+	mux.Handle("POST /admin/probes/{id}/toggle", s.requireSession(s.requireCSRF(http.HandlerFunc(s.handleProbeToggle))))
+	mux.Handle("POST /admin/probes/{id}/rotate", s.requireSession(s.requireCSRF(http.HandlerFunc(s.handleProbeRotate))))
+	mux.Handle("POST /admin/probes/{id}/delete", s.requireSession(s.requireCSRF(http.HandlerFunc(s.handleProbeDelete))))
+	mux.Handle("GET /admin/token/{slot}", s.requireSession(http.HandlerFunc(s.handleTokenShow)))
 
 	return mux
 }

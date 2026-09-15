@@ -6,18 +6,47 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/tano/cqu-netprobe-gateway/internal/config"
+	"github.com/tano/cqu-netprobe-gateway/internal/latest"
 	"github.com/tano/cqu-netprobe-gateway/internal/store"
 )
 
 type adminHarness struct {
 	server   *Server
 	store    *store.Store
+	latest   *latest.Store
+	limiter  *recordingLimiter
 	now      time.Time
 	password string
+}
+
+// recordingLimiter stands in for the api limiter so tests can observe the
+// in-memory cleanup a delete or disable must perform.
+type recordingLimiter struct {
+	mu      sync.Mutex
+	removed []string
+}
+
+func (l *recordingLimiter) Remove(probeID string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.removed = append(l.removed, probeID)
+}
+
+func (l *recordingLimiter) count(probeID string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n := 0
+	for _, id := range l.removed {
+		if id == probeID {
+			n++
+		}
+	}
+	return n
 }
 
 func newAdminHarness(t *testing.T, adminPassword string) *adminHarness {
@@ -36,10 +65,15 @@ func newAdminHarness(t *testing.T, adminPassword string) *adminHarness {
 		DataDir:       t.TempDir(),
 	}
 
+	// OnlineThreshold is left zero on purpose: the default must be 30s.
+	latestStore := latest.New()
+	limiter := &recordingLimiter{}
 	srv, err := NewServer(Deps{
-		Store:  st,
-		Config: cfg,
-		Now:    func() time.Time { return now },
+		Store:   st,
+		Config:  cfg,
+		Now:     func() time.Time { return now },
+		Latest:  latestStore,
+		Limiter: limiter,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
@@ -49,7 +83,10 @@ func newAdminHarness(t *testing.T, adminPassword string) *adminHarness {
 	if pw == "" {
 		pw, _ = srv.PasswordGeneration()
 	}
-	return &adminHarness{server: srv, store: st, now: now, password: pw}
+	return &adminHarness{
+		server: srv, store: st, latest: latestStore, limiter: limiter,
+		now: now, password: pw,
+	}
 }
 
 func (h *adminHarness) get(t *testing.T, path string, cookie *http.Cookie) *httptest.ResponseRecorder {
@@ -96,11 +133,24 @@ func (h *adminHarness) login(t *testing.T) *http.Cookie {
 
 func TestAdminRedirectsWhenUnauthenticated(t *testing.T) {
 	h := newAdminHarness(t, "test-password-value")
-	// Task 17 and Task 18 append their own paths to this table.
-	for _, path := range []string{"/admin/logout"} {
-		t.Run(path, func(t *testing.T) {
+	// Task 18 appends the target paths to these tables. The route table is
+	// method-aware, so GET and POST paths are listed separately. Logout keeps
+	// its own coverage in TestAdminLogoutInvalidatesSession.
+	for _, path := range []string{"/admin", "/admin/probes/new", "/admin/token/abc"} {
+		t.Run("GET "+path, func(t *testing.T) {
+			rec := h.get(t, path, nil)
+			if rec.Code != http.StatusSeeOther {
+				t.Fatalf("status = %d, want a redirect to login", rec.Code)
+			}
+			if loc := rec.Header().Get("Location"); loc != "/admin/login" {
+				t.Errorf("Location = %q, want /admin/login", loc)
+			}
+		})
+	}
+	for _, path := range []string{"/admin/probes/new", "/admin/probes/x/toggle"} {
+		t.Run("POST "+path, func(t *testing.T) {
 			rec := h.post(t, path, url.Values{}, nil)
-			if rec.Code != http.StatusSeeOther && rec.Code != http.StatusFound {
+			if rec.Code != http.StatusSeeOther {
 				t.Fatalf("status = %d, want a redirect to login", rec.Code)
 			}
 			if loc := rec.Header().Get("Location"); loc != "/admin/login" {
@@ -241,13 +291,8 @@ func TestAdminCSRFRequired(t *testing.T) {
 	h := newAdminHarness(t, "test-password-value")
 	cookie := h.login(t)
 
-	// The probe and target routes that wrap requireCSRF are registered by Tasks
-	// 17 and 18. Until they exist this exercises the middleware directly, with
-	// the same path and method those tasks will use.
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
-	mux := http.NewServeMux()
-	mux.Handle("POST /admin/probes/new", h.server.requireCSRF(next))
-
+	// Driven through the real route table: POST /admin/probes/new is wrapped in
+	// requireSession(requireCSRF(handleProbeCreate)).
 	post := func(cookie *http.Cookie, form url.Values) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodPost, "/admin/probes/new", strings.NewReader(form.Encode()))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -255,7 +300,7 @@ func TestAdminCSRFRequired(t *testing.T) {
 			req.AddCookie(cookie)
 		}
 		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, req)
+		h.server.Routes().ServeHTTP(rec, req)
 		return rec
 	}
 
@@ -278,13 +323,15 @@ func TestAdminCSRFRequired(t *testing.T) {
 		t.Fatalf("status = %d for a wrong CSRF token, want 403", bad.Code)
 	}
 
-	// The session's own token passes, so the check is not unconditional.
+	// The session's own token passes, so the check is not unconditional. The
+	// form here is empty, so the create handler answers 400: reaching the
+	// handler at all is the observable difference from the 403 above.
 	sess, ok := h.server.sessions.get(cookie.Value)
 	if !ok {
 		t.Fatal("session for the login cookie is gone")
 	}
-	if good := post(cookie, url.Values{"csrf": {sess.csrf}}); good.Code != http.StatusOK {
-		t.Fatalf("status = %d with the session CSRF token, want 200", good.Code)
+	if good := post(cookie, url.Values{"csrf": {sess.csrf}}); good.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d with the session CSRF token, want 400 from the handler", good.Code)
 	}
 }
 

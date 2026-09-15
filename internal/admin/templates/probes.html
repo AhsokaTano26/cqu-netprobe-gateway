@@ -1,0 +1,41 @@
+{{define "content"}}
+<div class="card">
+  <h1>Probes</h1>
+  <p><a href="/admin/probes/new"><button type="button">新建 Probe</button></a></p>
+  {{$now := .Pages.now}}
+  <table>
+    <thead>
+      <tr>
+        <th>Probe ID</th><th>校区</th><th>楼栋群</th><th>楼栋</th>
+        <th>网络</th><th>状态</th><th>Last Seen</th><th>创建时间</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {{range .Pages.probes}}
+      <tr>
+        <td><a href="/admin/probes/{{.Probe.ProbeID}}"><code>{{.Probe.ProbeID}}</code></a></td>
+        <td>{{.Probe.CampusName}} <span class="muted">({{.Probe.CampusCode}})</span></td>
+        <td>{{.Probe.BuildingGroupName}} <span class="muted">({{.Probe.BuildingGroupCode}})</span></td>
+        <td>{{.Probe.BuildingName}} <span class="muted">({{.Probe.BuildingCode}})</span></td>
+        <td>{{.Probe.NetworkType}}</td>
+        <td>
+          {{if not .Probe.Enabled}}<span class="badge disabled">Disabled</span>
+          {{else if .Online}}<span class="badge online">Online</span>
+          {{else}}<span class="badge offline">Offline</span>{{end}}
+        </td>
+        <td>{{if .LastSeen}}{{formatAge .LastSeen $now}}{{else}}<span class="muted">从未</span>{{end}}</td>
+        <td>{{formatTime .Probe.CreatedAt}}</td>
+        <td class="actions">
+          <form method="post" action="/admin/probes/{{.Probe.ProbeID}}/toggle">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <button type="submit">{{if .Probe.Enabled}}禁用{{else}}启用{{end}}</button>
+          </form>
+        </td>
+      </tr>
+    {{else}}
+      <tr><td colspan="9" class="muted">还没有 Probe。点击「新建 Probe」开始。</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+</div>
+{{end}}

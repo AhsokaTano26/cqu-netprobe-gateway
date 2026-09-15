@@ -1,0 +1,41 @@
+{{define "content"}}
+{{$p := .Pages.probe}}
+<div class="card">
+  <h1>{{$p.Probe.ProbeID}}</h1>
+  <table>
+    <tr><th>状态</th><td>
+      {{if not $p.Probe.Enabled}}<span class="badge disabled">Disabled</span>
+      {{else if $p.Online}}<span class="badge online">Online</span>
+      {{else}}<span class="badge offline">Offline</span>{{end}}
+    </td></tr>
+    <tr><th>校区</th><td>{{$p.Probe.CampusName}} <code>{{$p.Probe.CampusCode}}</code></td></tr>
+    <tr><th>楼栋群</th><td>{{$p.Probe.BuildingGroupName}} <code>{{$p.Probe.BuildingGroupCode}}</code></td></tr>
+    <tr><th>楼栋</th><td>{{$p.Probe.BuildingName}} <code>{{$p.Probe.BuildingCode}}</code></td></tr>
+    <tr><th>网络类型</th><td>{{$p.Probe.NetworkType}}</td></tr>
+    <tr><th>备注</th><td>{{if $p.Probe.Description}}{{$p.Probe.Description}}{{else}}<span class="muted">—</span>{{end}}</td></tr>
+    <tr><th>Last Seen</th><td>{{if $p.LastSeen}}{{formatTime $p.LastSeen}}{{else}}<span class="muted">从未上报</span>{{end}}</td></tr>
+    <tr><th>创建时间</th><td>{{formatTime $p.Probe.CreatedAt}}</td></tr>
+    <tr><th>更新时间</th><td>{{formatTime $p.Probe.UpdatedAt}}</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h2>操作</h2>
+  <p>
+    <form method="post" action="/admin/probes/{{$p.Probe.ProbeID}}/toggle" class="inline">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <button type="submit">{{if $p.Probe.Enabled}}禁用 Probe{{else}}启用 Probe{{end}}</button>
+    </form>
+    <form method="post" action="/admin/probes/{{$p.Probe.ProbeID}}/rotate" class="inline">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <button type="submit">轮换 Token</button>
+    </form>
+    <form method="post" action="/admin/probes/{{$p.Probe.ProbeID}}/delete" class="inline"
+          onsubmit="return confirm('确定删除 {{$p.Probe.ProbeID}}？此操作不可恢复。');">
+      <input type="hidden" name="csrf" value="{{.CSRF}}">
+      <button type="submit" class="danger">删除 Probe</button>
+    </form>
+  </p>
+  <p class="muted">轮换 Token 不会改变 Probe ID，但旧 Token 会立即失效。</p>
+</div>
+{{end}}

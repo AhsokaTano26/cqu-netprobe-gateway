@@ -1,0 +1,49 @@
+{{define "content"}}
+<div class="card narrow">
+  <h1>新建 Probe</h1>
+  {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+  <form method="post" action="/admin/probes/new">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+
+    <h2>校区</h2>
+    <label>代号（小写字母、数字、下划线，进入 Prometheus Label 与 Probe ID）
+      <input type="text" name="campus_code" value="{{.Pages.form.campus_code}}" placeholder="hx" required>
+    </label>
+    <label>显示名
+      <input type="text" name="campus_name" value="{{.Pages.form.campus_name}}" placeholder="虎溪" required>
+    </label>
+
+    <h2>楼栋群</h2>
+    <label>代号（同一群的楼栋填相同值，例如松园各栋都填 sy）
+      <input type="text" name="building_group_code" value="{{.Pages.form.building_group_code}}" placeholder="sy" required>
+    </label>
+    <label>显示名
+      <input type="text" name="building_group_name" value="{{.Pages.form.building_group_name}}" placeholder="松园" required>
+    </label>
+
+    <h2>楼栋</h2>
+    <label>代号
+      <input type="text" name="building_code" value="{{.Pages.form.building_code}}" placeholder="sy01" required>
+    </label>
+    <label>显示名
+      <input type="text" name="building_name" value="{{.Pages.form.building_name}}" placeholder="松园一栋" required>
+    </label>
+
+    <h2>网络类型</h2>
+    <label>类型
+      <select name="network_type" required>
+        <option value="wired">wired</option>
+        <option value="wireless">wireless</option>
+      </select>
+    </label>
+
+    <h2>备注</h2>
+    <label>备注（不会进入 Prometheus Label）
+      <textarea name="description" rows="3">{{.Pages.form.description}}</textarea>
+    </label>
+
+    <button type="submit">创建</button>
+  </form>
+  <p class="muted">Probe ID 由 校区代号-楼栋代号-随机串 组成，创建后不可更改。</p>
+</div>
+{{end}}

@@ -15,12 +15,15 @@ var assets embed.FS
 // pageTemplates maps a page file name to a template set with the layout applied.
 type pageTemplates map[string]*template.Template
 
-// pageFiles lists the pages that have a template file. Tasks 17 and 18 append
-// theirs (probes.html, probe_new.html, probe_detail.html, token.html,
-// targets.html) as they add the handlers that render them: a name listed here
+// pageFiles lists the pages that have a template file. Task 18 appends
+// targets.html when it adds the handlers that render it: a name listed here
 // without a matching file makes parseTemplates fail and the package unbuildable.
 var pageFiles = []string{
 	"login.html",
+	"probes.html",
+	"probe_new.html",
+	"probe_detail.html",
+	"token.html",
 }
 
 // parseTemplates builds one template set per page. Each page file contains only
