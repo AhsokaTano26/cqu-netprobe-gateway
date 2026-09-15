@@ -26,6 +26,11 @@ import (
 // shutdownTimeout bounds how long in-flight requests may finish.
 const shutdownTimeout = 15 * time.Second
 
+// version is the release version, injected at build time with
+// -ldflags="-X main.version=v1.2.3" (see Dockerfile). It stays "dev" for
+// `go build` / `go run` from a working tree.
+var version = "dev"
+
 // Handler bundles both listeners' handlers with the state they share.
 //
 // Latest and Self are exported because the metrics collector must be given the
@@ -158,7 +163,7 @@ func run() error {
 
 	errCh := make(chan error, 2)
 	go func() {
-		logger.Info("starting push listener", "addr", cfg.ListenAddr)
+		logger.Info("starting push listener", "addr", cfg.ListenAddr, "version", version)
 		if err := publicSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- fmt.Errorf("push listener: %w", err)
 		}

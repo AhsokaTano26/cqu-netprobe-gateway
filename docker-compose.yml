@@ -11,12 +11,24 @@ services:
     env_file:
       - .env
 
+    # Matches the image's nonroot user by default. On a native Linux host the
+    # bind-mounted ./data is owned by the deploying user, so set PUID/PGID
+    # (id -u / id -g) or chown ./data to 65532.
+    user: "${PUID:-65532}:${PGID:-65532}"
+
     ports:
       # Public listener: push API + admin UI. Put this behind a TLS terminator.
-      - "${LISTEN_ADDR:-0.0.0.0:8080}:8080"
+      # The host port is LISTEN_HOST_PORT and is independent of LISTEN_ADDR;
+      # the container side is always 8080, so LISTEN_ADDR must bind 0.0.0.0
+      # (a loopback value inside the container is unreachable through the
+      # published port).
+      - "${LISTEN_HOST_PORT:-8080}:8080"
       # Metrics listener is deliberately NOT published to the host by default.
-      # Uncomment only when Prometheus runs on a different machine, and keep
-      # METRICS_ALLOWED_CIDRS set so the IP allowlist still applies.
+      # Uncomment only when Prometheus runs on a different machine. Doing so
+      # requires BOTH edits: set METRICS_ADDR=0.0.0.0:9090 so the metrics
+      # listener accepts connections from outside its own namespace, and keep
+      # METRICS_ALLOWED_CIDRS set so the IP allowlist still applies. The host
+      # side stays bound to loopback.
       # - "127.0.0.1:9090:9090"
 
     volumes:

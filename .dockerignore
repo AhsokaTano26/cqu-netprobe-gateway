@@ -1,5 +1,6 @@
 .git
 .claude
+.superpowers
 docs/superpowers
 data
 *.db
