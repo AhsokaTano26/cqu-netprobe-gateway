@@ -558,6 +558,26 @@ func TestWriteProtocolErrorIgnoresErrorMessage(t *testing.T) {
 	}
 }
 
+// TestPushWrongMethodIsCountedInRouteMetrics pins the 405 fallback's place
+// inside RouteMetrics. Registered outside it, every method-not-allowed request
+// would be invisible in http_requests_total: an operator would see a probe
+// fleet's misconfigured method and a healthy request graph at the same time.
+func TestPushWrongMethodIsCountedInRouteMetrics(t *testing.T) {
+	h := newHarness(t)
+	if rec := h.do(t, http.MethodGet, "", "application/json", h.bearer()); rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rec.Code)
+	}
+
+	want := `
+# HELP cqu_netprobe_gateway_http_requests_total HTTP requests by method, route pattern and status.
+# TYPE cqu_netprobe_gateway_http_requests_total counter
+cqu_netprobe_gateway_http_requests_total{method="GET",path="/api/v1/push",status="405"} 1
+`
+	if err := testutil.CollectAndCompare(h.self.HTTPRequests, strings.NewReader(want)); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPushRecordsSelfMetrics(t *testing.T) {
 	h := newHarness(t)
 

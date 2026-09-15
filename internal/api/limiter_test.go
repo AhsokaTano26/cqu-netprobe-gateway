@@ -126,3 +126,79 @@ func TestAuthFailureMapIsBounded(t *testing.T) {
 func ipForIndex(i int) string {
 	return fmt.Sprintf("10.%d.%d.%d", (i>>16)&0xff, (i>>8)&0xff, i&0xff)
 }
+
+// fillAuthFailures fills the failure map to its cap.
+func fillAuthFailures(l *Limiter) {
+	for i := 0; i < maxTrackedAuthFailures; i++ {
+		l.AllowAuthFailure(ipForIndex(i))
+	}
+}
+
+// setRecency overwrites one entry's recency stamp. The real clock separates
+// maxTrackedAuthFailures inserts by only a few milliseconds, which would make
+// "which entry is oldest" a coin flip; this makes the ordering explicit.
+func setRecency(l *Limiter, ip string, at time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.failures[ip].lastUsed = at
+}
+
+func tracked(l *Limiter, ip string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	_, ok := l.failures[ip]
+	return ok
+}
+
+// TestAuthFailureEvictionIsLRU pins §10.2's "bounded LRU". The previous policy
+// deleted an arbitrary entry, which under a flood of forged source addresses
+// could discard the attacker's own counter and hand it a fresh burst, so the
+// layer would stop limiting the actor it exists for. Here the address that is
+// still failing is the oldest entry until its own call refreshes it, so an
+// implementation that does not touch the stamp evicts it.
+func TestAuthFailureEvictionIsLRU(t *testing.T) {
+	l := NewLimiter(5*time.Second, 3)
+	fillAuthFailures(l)
+
+	idle, active := ipForIndex(0), ipForIndex(1)
+	setRecency(l, idle, time.Now().Add(-time.Hour))
+	setRecency(l, active, time.Now().Add(-2*time.Hour))
+
+	// The failing call must refresh the active address's recency.
+	if !l.AllowAuthFailure(active) {
+		t.Fatal("the still-failing address was throttled; its budget was full")
+	}
+
+	// One more address overflows the cap and forces exactly one eviction.
+	l.AllowAuthFailure(ipForIndex(maxTrackedAuthFailures))
+
+	if !tracked(l, active) {
+		t.Error("the still-failing address was evicted; an active counter must survive eviction")
+	}
+	if tracked(l, idle) {
+		t.Error("the idle address survived; the least recently used entry must be the one evicted")
+	}
+}
+
+// TestAuthFailurePeekRefreshesRecency covers the other half of the LRU: the
+// peek is read-only for the budget but must still count as use, or an address
+// that keeps knocking would have its entry evicted and its block would lapse.
+func TestAuthFailurePeekRefreshesRecency(t *testing.T) {
+	l := NewLimiter(5*time.Second, 3)
+	fillAuthFailures(l)
+
+	idle, active := ipForIndex(0), ipForIndex(1)
+	setRecency(l, idle, time.Now().Add(-time.Hour))
+	setRecency(l, active, time.Now().Add(-2*time.Hour))
+
+	l.AuthFailureBlocked(active)
+
+	l.AllowAuthFailure(ipForIndex(maxTrackedAuthFailures))
+
+	if !tracked(l, active) {
+		t.Error("the evicted entry was the one being peeked at; the peek must refresh recency")
+	}
+	if tracked(l, idle) {
+		t.Error("the least recently used entry survived eviction")
+	}
+}

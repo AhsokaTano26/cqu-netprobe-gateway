@@ -77,9 +77,16 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.Handle("POST /api/v1/push", push)
 
 	// Any other method on the push path is a 405, not a 404 (Protocol v1 §16).
-	mux.HandleFunc("/api/v1/push", func(w http.ResponseWriter, r *http.Request) {
+	// It is wrapped in RouteMetrics like the push route: a 405 is still traffic
+	// against this route, and leaving it outside the counter would hide every
+	// wrong-method request from http_requests_total.
+	var notAllowed http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, protocol.CodeInvalidRequest, msgMethod)
 	})
+	if s.self != nil {
+		notAllowed = RouteMetrics(s.self, notAllowed)
+	}
+	mux.Handle("/api/v1/push", notAllowed)
 
 	return mux
 }
@@ -227,8 +234,14 @@ func (s *Server) reject(code, probeID string) {
 	if s.self != nil {
 		s.self.PushRejected.WithLabelValues(code).Inc()
 	}
+	// Info, not Debug: the default LOG_LEVEL is info, and a rejected push is
+	// exactly the signal an operator needs. A probe fleet misconfigured with a
+	// bad version, an unknown target or a disabled probe would otherwise produce
+	// zero log lines, and the per-probe_id line naming the offender would never
+	// appear. Accepted pushes stay at Debug, which is the anti-flood decision.
+	//
 	// probeID is the public identifier, never the token or its hash.
-	s.logger.Debug("rejected push", "reason", code, "probe_id", probeID)
+	s.logger.Info("rejected push", "reason", code, "probe_id", probeID)
 }
 
 // writeProtocolError renders a validation failure and records the metric.

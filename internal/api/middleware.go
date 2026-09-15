@@ -66,6 +66,10 @@ func (s *statusRecorder) Write(b []byte) (int, error) {
 	return s.ResponseWriter.Write(b)
 }
 
+// Unwrap exposes the underlying ResponseWriter so http.ResponseController and
+// http.MaxBytesReader can reach it.
+func (s *statusRecorder) Unwrap() http.ResponseWriter { return s.ResponseWriter }
+
 // routeLabel is the path label for a request: the path portion of the ServeMux
 // pattern that matched, or "unmatched" when nothing matched.
 //
