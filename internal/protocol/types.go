@@ -6,7 +6,8 @@ package protocol
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
+	"errors"
+	"io"
 )
 
 // Version is the only protocol version this gateway speaks.
@@ -59,16 +60,12 @@ type ICMPResult struct {
 	AvgRTTMS  *float64
 	MaxRTTMS  *float64
 	JitterMS  *float64
-
-	present map[string]bool
 }
 
 // DNSResult is Protocol v1 §10.
 type DNSResult struct {
 	Success    bool
 	DurationMS *float64
-
-	present map[string]bool
 }
 
 // HTTPResult is Protocol v1 §11.
@@ -76,8 +73,6 @@ type HTTPResult struct {
 	Success    bool
 	StatusCode *int
 	DurationMS *float64
-
-	present map[string]bool
 }
 
 // rawRequest mirrors the JSON shape. RawMessage defers measurement decoding so
@@ -98,14 +93,15 @@ type rawRequest struct {
 // preserved so Validate can reject them.
 func Decode(body []byte) (*PushRequest, error) {
 	dec := json.NewDecoder(bytes.NewReader(body))
-	dec.UseNumber()
 
 	var raw rawRequest
 	if err := dec.Decode(&raw); err != nil {
 		return nil, newError(CodeInvalidJSON, "request body is not valid JSON")
 	}
-	// Reject trailing content after the first JSON value.
-	if dec.More() {
+	// A well-formed body contains exactly one JSON value. Decoding a second time
+	// must hit EOF; anything else (including a stray ']' or '}', which More()
+	// would silently accept) is trailing data.
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return nil, newError(CodeInvalidJSON, "request body contains trailing data")
 	}
 
@@ -152,11 +148,9 @@ func decodeMeasurement(pt ProbeType, body json.RawMessage) (Measurement, error) 
 	}
 }
 
-// jsonFields decodes into a generic map so we can record which keys were
-// literally present. The wide-format API reports "field absent"; the probe
-// sending an explicit null is indistinguishable to encoding/json. Protocol v1
-// §8 shows explicit nulls, so presence is tracked only to keep the option of
-// stricter handling open, not to reject anything.
+// jsonFields decodes into a generic map purely to prove the measurement body
+// is a JSON object. A non-object body such as `"icmp": 5` must fail with
+// invalid_json rather than silently decoding to a zero-valued measurement.
 func jsonFields(body json.RawMessage) (map[string]json.RawMessage, error) {
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(body, &fields); err != nil {
@@ -166,14 +160,12 @@ func jsonFields(body json.RawMessage) (map[string]json.RawMessage, error) {
 }
 
 func decodeICMP(body json.RawMessage) (*ICMPResult, error) {
-	fields, err := jsonFields(body)
-	if err != nil {
+	// jsonFields only validates that the body is a JSON object; the keys it
+	// returns are unused.
+	if _, err := jsonFields(body); err != nil {
 		return nil, err
 	}
-	r := &ICMPResult{present: make(map[string]bool, len(fields))}
-	for k := range fields {
-		r.present[k] = true
-	}
+	r := &ICMPResult{}
 	var wire struct {
 		Success   *bool    `json:"success"`
 		Sent      *int     `json:"sent"`
@@ -204,14 +196,12 @@ func decodeICMP(body json.RawMessage) (*ICMPResult, error) {
 }
 
 func decodeDNS(body json.RawMessage) (*DNSResult, error) {
-	fields, err := jsonFields(body)
-	if err != nil {
+	// jsonFields only validates that the body is a JSON object; the keys it
+	// returns are unused.
+	if _, err := jsonFields(body); err != nil {
 		return nil, err
 	}
-	r := &DNSResult{present: make(map[string]bool, len(fields))}
-	for k := range fields {
-		r.present[k] = true
-	}
+	r := &DNSResult{}
 	var wire struct {
 		Success    *bool    `json:"success"`
 		DurationMS *float64 `json:"duration_ms"`
@@ -227,14 +217,12 @@ func decodeDNS(body json.RawMessage) (*DNSResult, error) {
 }
 
 func decodeHTTP(body json.RawMessage) (*HTTPResult, error) {
-	fields, err := jsonFields(body)
-	if err != nil {
+	// jsonFields only validates that the body is a JSON object; the keys it
+	// returns are unused.
+	if _, err := jsonFields(body); err != nil {
 		return nil, err
 	}
-	r := &HTTPResult{present: make(map[string]bool, len(fields))}
-	for k := range fields {
-		r.present[k] = true
-	}
+	r := &HTTPResult{}
 	var wire struct {
 		Success    *bool    `json:"success"`
 		StatusCode *int     `json:"status_code"`
@@ -258,9 +246,4 @@ func unmarshalStrict(body json.RawMessage, v any) error {
 		return newError(CodeInvalidJSON, "measurement contains a value of the wrong type")
 	}
 	return nil
-}
-
-// String renders results for debugging. Never logged for untrusted input.
-func (r Results) String() string {
-	return fmt.Sprintf("Results(%d targets)", len(r))
 }

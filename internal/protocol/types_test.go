@@ -97,19 +97,34 @@ func TestDecodeDistinguishesNullFromAbsent(t *testing.T) {
 	}
 }
 
-func TestDecodePresenceTracking(t *testing.T) {
-	// presence must record which keys were literally present in the JSON.
-	withNull := `{"version":1,"timestamp":1,"probe_version":"1","results":{"a":{"icmp":{"success":false,"sent":3,"received":0,"loss_ratio":1.0,"min_rtt_ms":null}}}}`
-	req, err := Decode([]byte(withNull))
-	if err != nil {
-		t.Fatalf("Decode() error = %v", err)
+func TestDecodeRejectsTrailingContent(t *testing.T) {
+	valid := `{"version":1,"timestamp":1,"probe_version":"1","results":{"campus_dns":{"dns":{"success":true,"duration_ms":1.0}}}}`
+
+	rejected := map[string]string{
+		"second JSON value":   valid + `{"version":2}`,
+		"garbage":             valid + ` garbage`,
+		"second array":        valid + `[]`,
+		"stray close bracket": valid + `]`,
+		"stray close brace":   valid + `}`,
 	}
-	icmp := req.Results["a"][ProbeICMP].ICMP
-	if !icmp.present["min_rtt_ms"] {
-		t.Error("min_rtt_ms should be marked present")
+	for name, body := range rejected {
+		t.Run(name, func(t *testing.T) {
+			_, err := Decode([]byte(body))
+			assertCode(t, err, CodeInvalidJSON)
+		})
 	}
-	if icmp.present["avg_rtt_ms"] {
-		t.Error("avg_rtt_ms should not be marked present")
+
+	accepted := map[string]string{
+		"trailing whitespace": valid + "  \n\t",
+		"trailing newline":    valid + "\n",
+		"no trailing content": valid,
+	}
+	for name, body := range accepted {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Decode([]byte(body)); err != nil {
+				t.Fatalf("Decode() with %s error = %v, want nil", name, err)
+			}
+		})
 	}
 }
 
