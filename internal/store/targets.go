@@ -17,10 +17,14 @@ type Target struct {
 	DisplayName string
 	Address     string
 	Description string
-	Enabled     bool
-	ProbeTypes  []string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	// Enabled gates the target's presence in Allowlist. The zero value is
+	// false: a Target is disabled unless Enabled: true is set explicitly, and
+	// a disabled target is rejected with 400 invalid_target exactly like an
+	// unknown one.
+	Enabled    bool
+	ProbeTypes []string
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 // ListTargets returns all targets ordered by target_id, each with its allowed
@@ -76,22 +80,36 @@ func (s *Store) probeTypesFor(targetID string) ([]string, error) {
 		}
 		out = append(out, pt)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: iterate probe types: %w", err)
+	}
+	return out, nil
 }
 
 // CreateTarget inserts a target and its allowed probe types atomically.
 func (s *Store) CreateTarget(t *Target) error {
-	now := nowUnix()
-	t.CreatedAt = time.Unix(now, 0).UTC()
-	t.UpdatedAt = t.CreatedAt
-
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("store: begin create target: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	_, err = tx.Exec(`INSERT INTO targets (target_id, display_name, address, description,
+	if err := createTargetTx(tx, t); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// createTargetTx inserts a target and its probe types using the caller's
+// transaction, so callers can compose several targets into one atomic unit. It
+// touches only tx and never s.db: the store holds a single connection, so
+// reaching back to the pool from inside a transaction would deadlock.
+func createTargetTx(tx *sql.Tx, t *Target) error {
+	now := nowUnix()
+	t.CreatedAt = time.Unix(now, 0).UTC()
+	t.UpdatedAt = t.CreatedAt
+
+	_, err := tx.Exec(`INSERT INTO targets (target_id, display_name, address, description,
 		enabled, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		t.TargetID, t.DisplayName, t.Address, t.Description,
 		boolToInt(t.Enabled), now, now)
@@ -101,10 +119,7 @@ func (s *Store) CreateTarget(t *Target) error {
 	if err != nil {
 		return fmt.Errorf("store: create target: %w", err)
 	}
-	if err := insertProbeTypes(tx, t.TargetID, t.ProbeTypes); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return insertProbeTypes(tx, t.TargetID, t.ProbeTypes)
 }
 
 // UpdateTarget replaces a target's metadata and probe type set.
@@ -203,7 +218,7 @@ func (s *Store) Allowlist() (protocol.Allowlist, error) {
 
 // ProbeTypesSorted returns a sorted copy of types, used by the admin templates.
 func ProbeTypesSorted(types []string) []string {
-	out := append([]string(nil), types...)
+	out := append([]string{}, types...)
 	sort.Strings(out)
 	return out
 }

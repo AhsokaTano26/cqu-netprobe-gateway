@@ -125,9 +125,11 @@ var defaultTargets = []Target{
 // therefore permanent, but deleting every target re-seeds the full default set
 // on the next Open.
 //
-// Each entry goes through CreateTarget, which already wraps the target row and
-// its probe types in one transaction, so a partial failure cannot leave a
-// default target without its probe types.
+// The five defaults are seeded in a single transaction, so a failure partway
+// through commits nothing and the next Open retries the whole set: the
+// COUNT(*) == 0 guard would never re-seed the entries a partial failure had
+// already skipped, leaving the gateway permanently rejecting them with 400
+// invalid_target.
 func (s *Store) seed() error {
 	var count int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM targets`).Scan(&count); err != nil {
@@ -137,13 +139,22 @@ func (s *Store) seed() error {
 		return nil
 	}
 
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: begin seed: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	for i := range defaultTargets {
-		// Copy: CreateTarget stamps CreatedAt/UpdatedAt on the value it is given,
-		// and the package-level defaults must not be mutated.
+		// Copy: createTargetTx stamps CreatedAt/UpdatedAt on the value it is
+		// given, and the package-level defaults must not be mutated.
 		target := defaultTargets[i]
-		if err := s.CreateTarget(&target); err != nil {
+		if err := createTargetTx(tx, &target); err != nil {
 			return fmt.Errorf("store: seed target %s: %w", target.TargetID, err)
 		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit seed: %w", err)
 	}
 	return nil
 }

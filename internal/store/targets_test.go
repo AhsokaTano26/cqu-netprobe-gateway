@@ -64,6 +64,52 @@ func TestSeedDoesNotResurrectDeletedTargets(t *testing.T) {
 	}
 }
 
+// TestSeedRollsBackAllTargetsOnPartialFailure pins the all-or-nothing property
+// of seeding. A mid-seed failure must commit nothing, because the COUNT(*) == 0
+// guard never re-seeds a non-empty table: any target committed by a failed seed
+// would be missing from the allowlist forever, permanently rejecting reports on
+// it with 400 invalid_target.
+//
+// The defaults are substituted for the duration of the test only to inject a
+// failure at a known point (the second entry duplicates the first, tripping the
+// targets.target_id UNIQUE constraint); the guard above only lets seed() run
+// while the targets table is empty, so a pre-existing conflicting row cannot be
+// used instead.
+func TestSeedRollsBackAllTargetsOnPartialFailure(t *testing.T) {
+	s := newTestStore(t)
+
+	// Empty the table so seed() runs again on this handle.
+	if _, err := s.db.Exec(`DELETE FROM targets`); err != nil {
+		t.Fatalf("clear targets: %v", err)
+	}
+
+	original := defaultTargets
+	defaultTargets = []Target{
+		{TargetID: "atomic_ok", ProbeTypes: []string{"icmp"}, Enabled: true},
+		{TargetID: "atomic_ok", ProbeTypes: []string{"dns"}, Enabled: true},
+	}
+	defer func() { defaultTargets = original }()
+
+	err := s.seed()
+	if !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("seed() error = %v, want ErrDuplicate from the injected collision", err)
+	}
+
+	var targets, probeTypes int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM targets`).Scan(&targets); err != nil {
+		t.Fatalf("count targets: %v", err)
+	}
+	if targets != 0 {
+		t.Errorf("targets committed by a failed seed = %d, want 0 (seed must roll back as one unit)", targets)
+	}
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM target_probe_types`).Scan(&probeTypes); err != nil {
+		t.Fatalf("count target_probe_types: %v", err)
+	}
+	if probeTypes != 0 {
+		t.Errorf("probe types committed by a failed seed = %d, want 0", probeTypes)
+	}
+}
+
 func TestCreateTargetWithProbeTypes(t *testing.T) {
 	s := newTestStore(t)
 	tg := &Target{
@@ -118,16 +164,21 @@ func TestUpdateTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTargets() error = %v", err)
 	}
+	found := false
 	for _, tg := range targets {
 		if tg.TargetID != "upd" {
 			continue
 		}
+		found = true
 		if tg.Address != "2.2.2.2" {
 			t.Errorf("Address = %q, want 2.2.2.2", tg.Address)
 		}
 		if len(tg.ProbeTypes) != 2 {
 			t.Errorf("ProbeTypes = %v, want 2 entries", tg.ProbeTypes)
 		}
+	}
+	if !found {
+		t.Fatal("updated target upd is missing from ListTargets(); nothing above was checked")
 	}
 }
 
@@ -171,17 +222,37 @@ func TestAllowlistShape(t *testing.T) {
 	if al["cqu_mirror"][protocol.ProbeICMP] {
 		t.Error("cqu_mirror must not allow icmp")
 	}
+
+	// All five defaults, not just the two above: dropping Enabled: true from
+	// any entry removes it from the allowlist and turns every probe report on
+	// it into a 400 invalid_target, so each one needs its own guard.
+	for _, id := range []string{"campus_dns", "aliyun_dns", "dnspod_dns", "cloudflare_dns", "cqu_mirror"} {
+		if len(al[id]) == 0 {
+			t.Errorf("seeded target %q allows %v, want a non-empty probe type set (disabled or missing)", id, al[id])
+		}
+	}
 }
 
 func TestDisabledTargetExcludedFromAllowlist(t *testing.T) {
 	s := newTestStore(t)
-	if err := s.CreateTarget(&Target{TargetID: "off", ProbeTypes: []string{"icmp"}}); err != nil {
+	if err := s.CreateTarget(&Target{TargetID: "off", ProbeTypes: []string{"icmp"}, Enabled: true}); err != nil {
 		t.Fatalf("CreateTarget() error = %v", err)
 	}
+
+	// Positive case first: without it this test would also pass if UpdateTarget
+	// ignored Enabled entirely, because a zero-value Target is disabled as well.
+	al, err := s.Allowlist()
+	if err != nil {
+		t.Fatalf("Allowlist() error = %v", err)
+	}
+	if !al["off"][protocol.ProbeICMP] {
+		t.Fatalf("enabled target off allows %v, want icmp; the assertions below prove nothing otherwise", al["off"])
+	}
+
 	if err := s.UpdateTarget(&Target{TargetID: "off", ProbeTypes: []string{"icmp"}, Enabled: false}); err != nil {
 		t.Fatalf("UpdateTarget() error = %v", err)
 	}
-	al, err := s.Allowlist()
+	al, err = s.Allowlist()
 	if err != nil {
 		t.Fatalf("Allowlist() error = %v", err)
 	}
