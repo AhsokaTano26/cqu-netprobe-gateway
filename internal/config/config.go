@@ -46,6 +46,9 @@ func Load() (*Config, error) {
 	if cfg.OnlineThreshold, err = durationEnv("ONLINE_THRESHOLD", 30*time.Second); err != nil {
 		return nil, err
 	}
+	if cfg.OnlineThreshold <= 0 {
+		return nil, fmt.Errorf("config: ONLINE_THRESHOLD must be positive, got %s", cfg.OnlineThreshold)
+	}
 	if cfg.RateLimit, err = durationEnv("RATE_LIMIT", 5*time.Second); err != nil {
 		return nil, err
 	}
@@ -56,7 +59,7 @@ func Load() (*Config, error) {
 	burst := envOr("RATE_LIMIT_BURST", "3")
 	cfg.RateLimitBurst, err = strconv.Atoi(burst)
 	if err != nil {
-		return nil, fmt.Errorf("config: RATE_LIMIT_BURST %q is not an integer", burst)
+		return nil, fmt.Errorf("config: RATE_LIMIT_BURST %q is not an integer: %w", burst, err)
 	}
 	if cfg.RateLimitBurst < 1 {
 		return nil, fmt.Errorf("config: RATE_LIMIT_BURST must be >= 1, got %d", cfg.RateLimitBurst)
@@ -67,9 +70,6 @@ func Load() (*Config, error) {
 	}
 	if cfg.LogLevel, err = parseLevel(envOr("LOG_LEVEL", "info")); err != nil {
 		return nil, err
-	}
-	if cfg.DataDir == "" {
-		return nil, fmt.Errorf("config: DATA_DIR must not be empty")
 	}
 	return cfg, nil
 }

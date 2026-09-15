@@ -1,12 +1,15 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
 
-func TestLoadDefaults(t *testing.T) {
-	// Ensure a clean environment for this test.
+// clearEnv neutralizes every variable Load reads, so a test's outcome depends
+// on its own t.Setenv calls and not on the ambient shell or CI environment.
+func clearEnv(t *testing.T) {
+	t.Helper()
 	for _, k := range []string{
 		"LISTEN_ADDR", "METRICS_ADDR", "DATA_DIR", "PUBLIC_BASE_URL",
 		"ADMIN_USERNAME", "ADMIN_PASSWORD", "ONLINE_THRESHOLD",
@@ -14,6 +17,10 @@ func TestLoadDefaults(t *testing.T) {
 	} {
 		t.Setenv(k, "")
 	}
+}
+
+func TestLoadDefaults(t *testing.T) {
+	clearEnv(t)
 
 	cfg, err := Load()
 	if err != nil {
@@ -47,6 +54,8 @@ func TestLoadDefaults(t *testing.T) {
 }
 
 func TestLoadOverrides(t *testing.T) {
+	clearEnv(t)
+
 	t.Setenv("LISTEN_ADDR", "127.0.0.1:9999")
 	t.Setenv("ONLINE_THRESHOLD", "45s")
 	t.Setenv("RATE_LIMIT_BURST", "7")
@@ -75,12 +84,16 @@ func TestLoadOverrides(t *testing.T) {
 }
 
 func TestLoadRejectsBadValues(t *testing.T) {
+	clearEnv(t)
+
 	cases := []struct {
 		name string
 		key  string
 		val  string
 	}{
 		{"bad duration", "ONLINE_THRESHOLD", "notaduration"},
+		{"zero online threshold", "ONLINE_THRESHOLD", "0s"},
+		{"negative online threshold", "ONLINE_THRESHOLD", "-30s"},
 		{"zero duration", "RATE_LIMIT", "0s"},
 		{"negative burst", "RATE_LIMIT_BURST", "-1"},
 		{"non-numeric burst", "RATE_LIMIT_BURST", "abc"},
@@ -90,8 +103,12 @@ func TestLoadRejectsBadValues(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv(tc.key, tc.val)
-			if _, err := Load(); err == nil {
+			_, err := Load()
+			if err == nil {
 				t.Fatalf("Load() with %s=%q: want error, got nil", tc.key, tc.val)
+			}
+			if !strings.Contains(err.Error(), tc.key) {
+				t.Fatalf("Load() with %s=%q: error %q does not name the offending key", tc.key, tc.val, err)
 			}
 		})
 	}
