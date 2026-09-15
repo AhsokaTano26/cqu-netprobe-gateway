@@ -87,3 +87,15 @@ func (l *Limiter) AllowAuthFailure(ip string) bool {
 	}
 	return b.Allow()
 }
+
+// AuthFailureBlocked reports whether ip has already exhausted its
+// authentication-failure budget. It is a read-only peek: it creates no bucket
+// and consumes no allowance, so calling it on every well-formed request does
+// not itself charge the IP anything. §10.2 specifies that a blocked IP's
+// requests return 401 fast, which is what this enables.
+func (l *Limiter) AuthFailureBlocked(ip string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	b, ok := l.failures[ip]
+	return ok && b.Tokens() < 1
+}

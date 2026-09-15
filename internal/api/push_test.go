@@ -1,6 +1,7 @@
 package api
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -21,12 +22,24 @@ type harness struct {
 	store  *store.Store
 	latest *latest.Store
 	self   *metrics.Self
-	now    time.Time
 	probe  *store.Probe
 	tok    string
+	clock  time.Time // the server's clock; tests advance this
 }
 
-func newHarness(t *testing.T) *harness {
+// baseClock is the instant the harness clock starts at. It is deliberately
+// different from goodBody's "timestamp" so that a handler reading the client
+// timestamp instead of the server clock is caught.
+var baseClock = time.Unix(1789490000, 0).UTC()
+
+func newHarness(t *testing.T) *harness { return newHarnessWith(t, true) }
+
+// newHarnessWithoutSelf builds a server whose Deps.Self is nil, exercising the
+// documented contract that self-metrics are optional (Routes only installs
+// RouteMetrics when Self is set).
+func newHarnessWithoutSelf(t *testing.T) *harness { return newHarnessWith(t, false) }
+
+func newHarnessWith(t *testing.T, withSelf bool) *harness {
 	t.Helper()
 
 	st, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
@@ -56,24 +69,45 @@ func newHarness(t *testing.T) *harness {
 		t.Fatalf("CreateProbe() error = %v", err)
 	}
 
-	l := latest.New()
-	self := metrics.NewSelf(prometheus.NewRegistry())
-	now := time.Unix(1789490000, 0).UTC()
+	var self *metrics.Self
+	if withSelf {
+		self = metrics.NewSelf(prometheus.NewRegistry())
+	}
 
-	srv := NewServer(Deps{
+	// The harness must exist before the Server so the Now closure can read the
+	// mutable clock field instead of capturing a copy of a local variable: a
+	// frozen clock makes the "advance the clock" tests vacuous.
+	h := &harness{
+		store:  st,
+		latest: latest.New(),
+		self:   self,
+		probe:  p,
+		tok:    tok,
+		clock:  baseClock,
+	}
+	h.server = NewServer(Deps{
 		Store:   st,
-		Latest:  l,
+		Latest:  h.latest,
 		Self:    self,
 		Limiter: NewLimiter(5*time.Second, 3),
-		Now:     func() time.Time { return now },
+		Now:     func() time.Time { return h.clock },
 	})
-
-	return &harness{server: srv, store: st, latest: l, self: self, now: now, probe: p, tok: tok}
+	return h
 }
 
 func (h *harness) do(t *testing.T, method, body, contentType, auth string) *httptest.ResponseRecorder {
 	t.Helper()
+	return h.doFrom(t, defaultTestIP, method, body, contentType, auth)
+}
+
+// defaultTestIP is the RemoteAddr host httptest.NewRequest sets, so every
+// request the plain do helper makes shares one source address.
+const defaultTestIP = "192.0.2.1"
+
+func (h *harness) doFrom(t *testing.T, ip, method, body, contentType, auth string) *httptest.ResponseRecorder {
+	t.Helper()
 	req := httptest.NewRequest(method, "/api/v1/push", strings.NewReader(body))
+	req.RemoteAddr = net.JoinHostPort(ip, "12345")
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
@@ -87,7 +121,7 @@ func (h *harness) do(t *testing.T, method, body, contentType, auth string) *http
 
 const goodBody = `{
   "version": 1,
-  "timestamp": 1789490000,
+  "timestamp": 1700000000,
   "probe_version": "0.1.0",
   "results": {
     "aliyun_dns": {"icmp": {"success": true, "sent": 5, "received": 5, "loss_ratio": 0.0,
@@ -114,8 +148,11 @@ func TestPushAcceptsValidRequest(t *testing.T) {
 	if !ok {
 		t.Fatal("latest measurement was not stored")
 	}
-	if !entry.ServerReceivedAt.Equal(h.now) {
-		t.Errorf("ServerReceivedAt = %v, want server time %v", entry.ServerReceivedAt, h.now)
+	// last_seen comes from the server clock, never from the body's "timestamp"
+	// (Protocol v1 §23). goodBody's timestamp differs from the clock, so a
+	// handler that echoed it would fail here.
+	if !entry.ServerReceivedAt.Equal(h.clock) {
+		t.Errorf("ServerReceivedAt = %v, want server time %v", entry.ServerReceivedAt, h.clock)
 	}
 }
 
@@ -152,6 +189,31 @@ func TestPushRejectsOversizedBody(t *testing.T) {
 	rec := h.do(t, http.MethodPost, big, "application/json", h.bearer())
 	if rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("status = %d, want 413", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "invalid_request") {
+		t.Errorf("body = %s", rec.Body.String())
+	}
+}
+
+// TestPushRejectsOversizedBodyViaLazyPath covers the MaxBytesReader path rather
+// than BodyLimit's eager Content-Length pre-check. The body is malformed JSON,
+// so if the handler's *http.MaxBytesError branch were removed (or ordered after
+// the decode) this request would answer 400 invalid_json instead of 413 —
+// Protocol v1 §20 requires 413 to win.
+func TestPushRejectsOversizedBodyViaLazyPath(t *testing.T) {
+	h := newHarness(t)
+	big := `{"version":1,"pad":"` + strings.Repeat("x", MaxBodyBytes) + `"`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/push", strings.NewReader(big))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", h.bearer())
+	// httptest.NewRequest fills ContentLength in from the *strings.Reader, which
+	// would let BodyLimit short-circuit on the header without ever installing
+	// http.MaxBytesReader. -1 forces the lazy path.
+	req.ContentLength = -1
+	rec := httptest.NewRecorder()
+	h.server.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413; body = %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -274,6 +336,11 @@ func TestPushRejectsEmptyResults(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
 	}
+	// Design doc §6.4/§7.1: an empty results object is a payload error, not a
+	// generic bad request.
+	if !strings.Contains(rec.Body.String(), "invalid_payload") {
+		t.Errorf("body = %s, want invalid_payload", rec.Body.String())
+	}
 }
 
 func TestPushRateLimited(t *testing.T) {
@@ -303,7 +370,7 @@ func TestPushInvalidRequestDoesNotRefreshLastSeen(t *testing.T) {
 	base, _ := h.latest.Get("hx-sy01-a83f21")
 
 	// Advance the clock, then send an invalid push.
-	h.now = h.now.Add(60 * time.Second)
+	h.clock = h.clock.Add(60 * time.Second)
 	bad := strings.Replace(goodBody, `"sent": 5`, `"sent": 0`, 1)
 	if rec := h.do(t, http.MethodPost, bad, "application/json", h.bearer()); rec.Code != http.StatusBadRequest {
 		t.Fatalf("invalid push status = %d, want 400", rec.Code)
@@ -322,7 +389,7 @@ func TestPushUnauthenticatedRequestDoesNotRefreshLastSeen(t *testing.T) {
 	}
 	base, _ := h.latest.Get("hx-sy01-a83f21")
 
-	h.now = h.now.Add(60 * time.Second)
+	h.clock = h.clock.Add(60 * time.Second)
 	if rec := h.do(t, http.MethodPost, goodBody, "application/json", "Bearer bogus"); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("bad-token status = %d, want 401", rec.Code)
 	}
@@ -330,6 +397,125 @@ func TestPushUnauthenticatedRequestDoesNotRefreshLastSeen(t *testing.T) {
 	after, _ := h.latest.Get("hx-sy01-a83f21")
 	if !after.ServerReceivedAt.Equal(base.ServerReceivedAt) {
 		t.Fatal("an unauthenticated push refreshed last_seen")
+	}
+}
+
+// TestPushAuthFailureThrottlePinsBudget drives the per-IP failure budget past
+// its burst from a single address. Without it, moving the throttle back above
+// the store lookup — or deleting it — would leave every other test green.
+func TestPushAuthFailureThrottlePinsBudget(t *testing.T) {
+	h := newHarness(t)
+	guessed, err := token.Generate()
+	if err != nil {
+		t.Fatalf("token.Generate() error = %v", err)
+	}
+
+	// authFailureBurst guesses are charged; the next one is past the budget.
+	for i := 1; i <= authFailureBurst+1; i++ {
+		rec := h.do(t, http.MethodPost, goodBody, "application/json", "Bearer "+guessed)
+		if rec.Code != http.StatusUnauthorized {
+			t.Fatalf("guess %d status = %d, want 401; body = %s", i, rec.Code, rec.Body.String())
+		}
+	}
+
+	// Guesses inside the budget are ordinary invalid tokens; only the one past
+	// the budget is reported as throttled (design doc §10.2).
+	if got := testutil.ToFloat64(h.self.AuthFailed.WithLabelValues("invalid_token")); got != authFailureBurst {
+		t.Errorf("auth_failed_total{reason=invalid_token} = %v, want %d", got, authFailureBurst)
+	}
+	if got := testutil.ToFloat64(h.self.AuthFailed.WithLabelValues("rate_limited")); got != 1 {
+		t.Errorf("auth_failed_total{reason=rate_limited} = %v, want 1", got)
+	}
+
+	// §10.2's core promise: the failure budget is per-IP and is never charged by
+	// traffic that authenticates. An address with a clean history is unaffected
+	// by another address's guessing and is accepted.
+	rec := h.doFrom(t, "192.0.2.7", http.MethodPost, goodBody, "application/json", h.bearer())
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("valid token from a clean IP: status = %d, want 204; body = %s", rec.Code, rec.Body.String())
+	}
+	if got := testutil.ToFloat64(h.self.AuthFailed.WithLabelValues("invalid_token")); got != authFailureBurst {
+		t.Errorf("a successful push was charged to the failure budget: invalid_token = %v, want %d", got, authFailureBurst)
+	}
+}
+
+// TestPushValidTokenIsNeverChargedToTheFailureBudget pins the deliberate
+// placement of AllowAuthFailure: it is consulted only once a token has failed
+// to resolve, because campus probes share NAT addresses and charging the IP
+// budget up front would throttle authenticated traffic. More valid pushes than
+// the burst are sent from one address; none may be answered 401 (they are
+// answered 204 or 429 by the per-probe bucket, which is keyed on the probe).
+func TestPushValidTokenIsNeverChargedToTheFailureBudget(t *testing.T) {
+	h := newHarness(t)
+	for i := 1; i <= authFailureBurst+5; i++ {
+		rec := h.do(t, http.MethodPost, goodBody, "application/json", h.bearer())
+		if rec.Code == http.StatusUnauthorized {
+			t.Fatalf("push %d with a VALID token was rejected as unauthenticated; "+
+				"the per-IP failure budget must never be charged by a successful authentication", i)
+		}
+	}
+	if got := testutil.ToFloat64(h.self.AuthFailed.WithLabelValues("rate_limited")); got != 0 {
+		t.Errorf("auth_failed_total{reason=rate_limited} = %v, want 0", got)
+	}
+}
+
+// TestPushBlockedIPFailsFastBeforeLookup covers AuthFailureBlocked: once an
+// address has exhausted its budget its requests are answered before the store
+// is touched, so a guessing flood costs no database work. The store is closed
+// to prove the absence of a lookup — a lookup would answer 503, not 401.
+func TestPushBlockedIPFailsFastBeforeLookup(t *testing.T) {
+	h := newHarness(t)
+	guessed, err := token.Generate()
+	if err != nil {
+		t.Fatalf("token.Generate() error = %v", err)
+	}
+	for i := 1; i <= authFailureBurst+1; i++ {
+		if rec := h.do(t, http.MethodPost, goodBody, "application/json", "Bearer "+guessed); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("guess %d status = %d, want 401", i, rec.Code)
+		}
+	}
+	_ = h.store.Close()
+
+	// The blocked address is turned away fast even with a valid token.
+	rec := h.do(t, http.MethodPost, goodBody, "application/json", h.bearer())
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("blocked IP: status = %d, want 401; body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "unauthorized") {
+		t.Errorf("body = %s", rec.Body.String())
+	}
+
+	// A different address still reaches the store, so the block is scoped to
+	// the address that did the guessing.
+	rec = h.doFrom(t, "192.0.2.9", http.MethodPost, goodBody, "application/json", h.bearer())
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unblocked IP: status = %d, want 503 from the closed store", rec.Code)
+	}
+}
+
+// TestPushWithoutSelfMetricsServesTraffic covers the documented contract that
+// Deps.Self is optional: Routes skips RouteMetrics when it is nil, so the
+// handler must not dereference it either.
+func TestPushWithoutSelfMetricsServesTraffic(t *testing.T) {
+	h := newHarnessWithoutSelf(t)
+
+	rec := h.do(t, http.MethodPost, goodBody, "application/json", h.bearer())
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("accepted push without Self: status = %d, want 204; body = %s", rec.Code, rec.Body.String())
+	}
+
+	rec = h.do(t, http.MethodPost, `{`, "application/json", h.bearer())
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("rejected push without Self: status = %d, want 400", rec.Code)
+	}
+
+	other, err := token.Generate()
+	if err != nil {
+		t.Fatalf("token.Generate() error = %v", err)
+	}
+	rec = h.do(t, http.MethodPost, goodBody, "application/json", "Bearer "+other)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("bad-token push without Self: status = %d, want 401", rec.Code)
 	}
 }
 

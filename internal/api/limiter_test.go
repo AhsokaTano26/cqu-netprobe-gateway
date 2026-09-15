@@ -74,6 +74,40 @@ func TestAuthFailureLimiter(t *testing.T) {
 	}
 }
 
+func TestAuthFailureBlockedIsReadOnly(t *testing.T) {
+	l := NewLimiter(5*time.Second, 3)
+
+	// An address with no recorded failures is not blocked, and peeking at it
+	// must not create a bucket.
+	if l.AuthFailureBlocked("10.0.0.9") {
+		t.Fatal("an address with no recorded failures was reported blocked")
+	}
+
+	// Leave exactly one allowance in the budget.
+	for i := 0; i < authFailureBurst-1; i++ {
+		if !l.AllowAuthFailure("10.0.0.9") {
+			t.Fatalf("failure %d within threshold was blocked", i+1)
+		}
+	}
+	// The peek reports "not blocked" (one allowance remains) and consumes
+	// nothing: the last allowance must still be spendable afterwards.
+	for i := 0; i < 5; i++ {
+		if l.AuthFailureBlocked("10.0.0.9") {
+			t.Fatal("an address with an allowance left was reported blocked")
+		}
+	}
+	if !l.AllowAuthFailure("10.0.0.9") {
+		t.Fatal("the last allowance was consumed by AuthFailureBlocked; the peek must be read-only")
+	}
+	if !l.AuthFailureBlocked("10.0.0.9") {
+		t.Fatal("an address past its budget was not reported blocked")
+	}
+	// The block is per-address.
+	if l.AuthFailureBlocked("10.0.0.10") {
+		t.Fatal("an unrelated address was reported blocked")
+	}
+}
+
 func TestAuthFailureMapIsBounded(t *testing.T) {
 	l := NewLimiter(5*time.Second, 3)
 	// Simulate a flood of forged source addresses.

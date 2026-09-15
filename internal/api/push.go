@@ -62,7 +62,7 @@ func NewServer(d Deps) *Server {
 // Routes returns the push API mux. The middleware order is deliberate and is
 // documented in the design doc §7:
 //
-//	body limit -> content type -> route metrics -> handler
+//	route metrics -> body limit -> content type -> handler
 //
 // Method checking is handled by the mux pattern itself, and authentication,
 // rate limiting and validation all live inside the handler so their relative
@@ -146,7 +146,9 @@ func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 
 	// 7. Accept. Only now does last_seen advance (Protocol v1 §23).
 	s.latest.Put(probe.ProbeID, req.Results, s.now().UTC())
-	s.self.PushTotal.Inc()
+	if s.self != nil {
+		s.self.PushTotal.Inc()
+	}
 	s.logger.Debug("accepted push", "probe_id", probe.ProbeID, "targets", len(req.Results))
 
 	w.WriteHeader(http.StatusNoContent)
@@ -164,6 +166,22 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (*store.Pr
 	raw := strings.TrimPrefix(header, bearerPrefix)
 	if raw == "" {
 		s.authFailed("missing_or_malformed")
+		writeError(w, http.StatusUnauthorized, protocol.CodeUnauthorized, msgUnauthorized)
+		return nil, false
+	}
+
+	// An address that has already exhausted its failure budget is answered
+	// before the store lookup, so a guessing flood past the budget costs no
+	// database work. This is a read-only peek (AuthFailureBlocked), not a
+	// charge: it does not consume an allowance, so it cannot make an
+	// authenticated caller's own traffic throttle itself.
+	//
+	// The deliberate consequence is that once an IP has crossed the budget the
+	// peek rejects ALL of that address's requests, including well-formed ones.
+	// That is what §10.2 literally specifies (该 IP 的请求快速返回 401), and it is
+	// only reachable once something behind that address has been guessing.
+	if s.limiter != nil && s.limiter.AuthFailureBlocked(ClientIP(r)) {
+		s.authFailed("rate_limited")
 		writeError(w, http.StatusUnauthorized, protocol.CodeUnauthorized, msgUnauthorized)
 		return nil, false
 	}
