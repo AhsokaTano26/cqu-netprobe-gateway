@@ -1,0 +1,139 @@
+package admin
+
+import (
+	"log/slog"
+	"net/http"
+	"time"
+
+	"github.com/tano/cqu-netprobe-gateway/internal/config"
+	"github.com/tano/cqu-netprobe-gateway/internal/store"
+)
+
+// sessionCookieName is the cookie holding the admin session ID.
+const sessionCookieName = "netprobe_admin_session"
+
+// adminPasswordSettingKey is the settings row holding the bcrypt hash of a
+// gateway-generated admin password.
+const adminPasswordSettingKey = "admin_password_hash"
+
+// Deps are the admin server's collaborators.
+type Deps struct {
+	Store  *store.Store
+	Config *config.Config
+	Logger *slog.Logger
+	Now    func() time.Time
+}
+
+// Server renders the management interface.
+type Server struct {
+	store     *store.Store
+	cfg       *config.Config
+	logger    *slog.Logger
+	now       func() time.Time
+	sessions  *sessionStore
+	oneShot   *oneShotStore
+	templates pageTemplates
+
+	username string
+	// passwordHash is the bcrypt hash the login handler compares against.
+	passwordHash string
+	// generatedPassword holds the plaintext only when this process generated it,
+	// so main can log it exactly once. It is empty otherwise.
+	generatedPassword string
+}
+
+// NewServer builds the admin server and resolves the admin password.
+//
+// Password resolution, in order:
+//  1. ADMIN_PASSWORD set  -> hash it in memory for this process only.
+//  2. a hash already stored in settings -> reuse it (a previous run generated it).
+//  3. otherwise -> generate one, store its hash, and expose the plaintext via
+//     PasswordGeneration so main can log it once.
+//
+// Generating only once matters: regenerating on every start would silently
+// invalidate the password an operator already read from the logs, and would
+// leave several live passwords scattered across log files.
+func NewServer(d Deps) (*Server, error) {
+	logger := d.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	now := d.Now
+	if now == nil {
+		now = time.Now
+	}
+
+	tmpl, err := parseTemplates()
+	if err != nil {
+		return nil, err
+	}
+
+	s := &Server{
+		store:     d.Store,
+		cfg:       d.Config,
+		logger:    logger,
+		now:       now,
+		sessions:  newSessionStore(sessionTTL, now),
+		oneShot:   newOneShotStore(oneShotTTL, now),
+		templates: tmpl,
+		username:  d.Config.AdminUsername,
+	}
+
+	if err := s.resolvePassword(); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+func (s *Server) resolvePassword() error {
+	if s.cfg.AdminPassword != "" {
+		hash, err := hashPassword(s.cfg.AdminPassword)
+		if err != nil {
+			return err
+		}
+		s.passwordHash = hash
+		return nil
+	}
+
+	stored, ok, err := s.store.Setting(adminPasswordSettingKey)
+	if err != nil {
+		return err
+	}
+	if ok {
+		s.passwordHash = stored
+		return nil
+	}
+
+	password, hash, err := generateAdminPassword()
+	if err != nil {
+		return err
+	}
+	if err := s.store.SetSetting(adminPasswordSettingKey, hash); err != nil {
+		return err
+	}
+	s.passwordHash = hash
+	s.generatedPassword = password
+	return nil
+}
+
+// PasswordGeneration reports the plaintext password if this process generated
+// one at startup, and false if the password came from configuration or from a
+// previous run. The caller logs it exactly once.
+func (s *Server) PasswordGeneration() (string, bool) {
+	return s.generatedPassword, s.generatedPassword != ""
+}
+
+// Routes returns the admin mux with the routes this task implements.
+//
+// Probe routes are appended by Task 17 and target routes by Task 18, so that
+// each task leaves the package compiling and its own tests passing.
+func (s *Server) Routes() *http.ServeMux {
+	mux := http.NewServeMux()
+
+	mux.Handle("GET /admin/login", http.HandlerFunc(s.handleLoginPage))
+	mux.Handle("POST /admin/login", http.HandlerFunc(s.handleLogin))
+	mux.Handle("POST /admin/logout", s.requireSession(http.HandlerFunc(s.handleLogout)))
+	mux.Handle("GET /admin/static/", staticHandler())
+
+	return mux
+}

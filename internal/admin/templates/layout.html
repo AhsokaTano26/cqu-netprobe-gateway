@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Title}} · CQU NetProbe Gateway</title>
+<link rel="stylesheet" href="/admin/static/admin.css">
+</head>
+<body>
+<header class="topbar">
+  <span class="brand">CQU NetProbe Gateway</span>
+  {{if .Username}}
+  <nav>
+    <a href="/admin">Probes</a>
+    <a href="/admin/targets">Targets</a>
+  </nav>
+  <form method="post" action="/admin/logout" class="inline">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button type="submit" class="link">登出 ({{.Username}})</button>
+  </form>
+  {{end}}
+</header>
+<main>
+{{template "content" .}}
+</main>
+</body>
+</html>
