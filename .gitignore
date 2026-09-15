@@ -1,0 +1,30 @@
+# --- AI tooling (never committed) ---
+.claude/
+CLAUDE.md
+AGENTS.md
+docs/superpowers/
+.superpowers/
+*.prompt.md
+
+# --- Secrets ---
+.env
+.env.local
+
+# --- Runtime data ---
+/data/
+*.db
+*.db-shm
+*.db-wal
+
+# --- Go ---
+/gateway
+/dist/
+*.test
+*.out
+coverage.txt
+
+# --- OS / editor ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
