@@ -148,10 +148,8 @@ func (s *Server) PasswordGeneration() (string, bool) {
 	return s.generatedPassword, s.generatedPassword != ""
 }
 
-// Routes returns the admin mux with the routes this task implements.
-//
-// Target routes are appended by Task 18, so that each task leaves the package
-// compiling and its own tests passing.
+// Routes returns the admin mux: session/static, the eight probe routes and the
+// four target routes.
 func (s *Server) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
 
@@ -169,6 +167,12 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.Handle("POST /admin/probes/{id}/rotate", s.requireSession(s.requireCSRF(http.HandlerFunc(s.handleProbeRotate))))
 	mux.Handle("POST /admin/probes/{id}/delete", s.requireSession(s.requireCSRF(http.HandlerFunc(s.handleProbeDelete))))
 	mux.Handle("GET /admin/token/{slot}", s.requireSession(http.HandlerFunc(s.handleTokenShow)))
+
+	// Target management (added by Task 18).
+	mux.Handle("GET /admin/targets", s.requireSession(http.HandlerFunc(s.handleTargetList)))
+	mux.Handle("POST /admin/targets/new", s.requireSession(s.requireCSRF(http.HandlerFunc(s.handleTargetCreate))))
+	mux.Handle("POST /admin/targets/{id}/update", s.requireSession(s.requireCSRF(http.HandlerFunc(s.handleTargetUpdate))))
+	mux.Handle("POST /admin/targets/{id}/delete", s.requireSession(s.requireCSRF(http.HandlerFunc(s.handleTargetDelete))))
 
 	return mux
 }

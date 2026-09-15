@@ -1,0 +1,58 @@
+{{define "content"}}
+<div class="card">
+  <h1>Targets</h1>
+  <p class="muted">
+    Target ID 会用作业 Prometheus 的 <code>target</code> Label，改名会使历史 Series 断裂。
+    未知 Target 或不允许的 Probe Type 一律被 Gateway 拒绝。
+  </p>
+  <table>
+    <thead>
+      <tr><th>Target ID</th><th>显示名</th><th>地址</th><th>允许的 Probe Type</th><th>状态</th><th>操作</th></tr>
+    </thead>
+    <tbody>
+    {{range .Pages.targets}}
+      <tr>
+        <td><code>{{.TargetID}}</code></td>
+        <td>{{.DisplayName}}</td>
+        <td class="muted">{{.Address}}</td>
+        <td>{{range .ProbeTypes}}<code>{{.}}</code> {{end}}</td>
+        <td>{{if .Enabled}}<span class="badge online">Enabled</span>{{else}}<span class="badge disabled">Disabled</span>{{end}}</td>
+        <td class="actions">
+          <form method="post" action="/admin/targets/{{.TargetID}}/delete"
+                onsubmit="return confirm('确定删除 Target {{.TargetID}}？使用它的 Probe 将立即被拒绝。');">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <button type="submit" class="danger">删除</button>
+          </form>
+        </td>
+      </tr>
+    {{end}}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>新增 / 修改 Target</h2>
+  <p class="muted">修改已有 Target 时，Target ID 填已存在的 ID 即可覆盖其配置。</p>
+  <form method="post" action="/admin/targets/new">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label>Target ID（小写字母、数字、下划线）
+      <input type="text" name="target_id" placeholder="campus_dns" required>
+    </label>
+    <label>显示名
+      <input type="text" name="display_name" placeholder="校园 DNS">
+    </label>
+    <label>地址（仅用于文档展示，Gateway 不会主动访问）
+      <input type="text" name="address" placeholder="223.5.5.5">
+    </label>
+    <label>备注
+      <textarea name="description" rows="2"></textarea>
+    </label>
+    <h2>允许的 Probe Type</h2>
+    <label><input type="checkbox" name="probe_types" value="icmp"> icmp</label>
+    <label><input type="checkbox" name="probe_types" value="dns"> dns</label>
+    <label><input type="checkbox" name="probe_types" value="http"> http</label>
+    <label><input type="checkbox" name="enabled" value="on" checked> 启用</label>
+    <button type="submit">保存</button>
+  </form>
+</div>
+{{end}}
