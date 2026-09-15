@@ -65,6 +65,16 @@ func TestMigrationsAreIdempotent(t *testing.T) {
 	if got.CampusName != "虎溪" {
 		t.Errorf("CampusName = %q, want 虎溪", got.CampusName)
 	}
+
+	// Migration bookkeeping must be recorded exactly once, so a re-apply is
+	// caught by the count rather than only by the version PRIMARY KEY.
+	var applied int
+	if err := s2.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&applied); err != nil {
+		t.Fatalf("count schema_migrations: %v", err)
+	}
+	if applied != 1 {
+		t.Errorf("schema_migrations rows = %d, want 1", applied)
+	}
 }
 
 func TestSeedRunsOnceAndDoesNotResurrectDeletedTargets(t *testing.T) {

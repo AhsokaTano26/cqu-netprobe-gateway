@@ -83,7 +83,8 @@ func (s *Store) ListProbes() ([]Probe, error) {
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []Probe
+	// Non-nil so an empty table marshals as [] rather than null in the admin API.
+	out := []Probe{}
 	for rows.Next() {
 		p, err := scanProbe(rows)
 		if err != nil {

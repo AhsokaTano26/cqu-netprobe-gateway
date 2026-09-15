@@ -6,7 +6,11 @@ import (
 	"sort"
 )
 
-//go:embed all:migrations
+// Plain "migrations" (not "all:migrations") deliberately excludes dotfiles:
+// the loader rejects any filename that is not NNN_*, so a stray .DS_Store in
+// this directory would otherwise make Open fail with a confusing version error.
+//
+//go:embed migrations
 var migrationFS embed.FS
 
 // migration is one numbered schema step. Version 1 is the initial schema.
@@ -100,31 +104,30 @@ func (s *Store) migrate() error {
 	return s.seed()
 }
 
-// seedTarget is one row of the built-in target set inserted on a fresh
-// database. It is deliberately separate from Target (added in a later task):
-// seeding writes rows directly and never goes through the CRUD API.
-type seedTarget struct {
-	TargetID    string
-	DisplayName string
-	Address     string
-	Description string
-	ProbeTypes  []string
-}
-
-// defaultTargets is the Target set from Protocol v1 §12. campus_dns has no
-// agreed address yet, so it is seeded empty for an administrator to fill in.
-var defaultTargets = []seedTarget{
+// defaultTargets is the Target set from Protocol v1 §12. Every entry carries an
+// explicit Enabled: true, because the zero value of Target.Enabled is false and
+// seeding is what makes these targets live.
+//
+// campus_dns has no agreed address yet, so it is seeded empty for an
+// administrator to fill in.
+var defaultTargets = []Target{
 	{TargetID: "campus_dns", DisplayName: "校园 DNS", Address: "", ProbeTypes: []string{"icmp", "dns"},
-		Description: "地址待管理员填写"},
-	{TargetID: "aliyun_dns", DisplayName: "阿里 DNS", Address: "223.5.5.5", ProbeTypes: []string{"icmp"}},
-	{TargetID: "dnspod_dns", DisplayName: "DNSPod DNS", Address: "119.29.29.29", ProbeTypes: []string{"icmp"}},
-	{TargetID: "cloudflare_dns", DisplayName: "Cloudflare DNS", Address: "1.1.1.1", ProbeTypes: []string{"icmp"}},
-	{TargetID: "cqu_mirror", DisplayName: "CQU 镜像站", Address: "https://mirrors.cqu.edu.cn/", ProbeTypes: []string{"http"}},
+		Description: "地址待管理员填写", Enabled: true},
+	{TargetID: "aliyun_dns", DisplayName: "阿里 DNS", Address: "223.5.5.5", ProbeTypes: []string{"icmp"}, Enabled: true},
+	{TargetID: "dnspod_dns", DisplayName: "DNSPod DNS", Address: "119.29.29.29", ProbeTypes: []string{"icmp"}, Enabled: true},
+	{TargetID: "cloudflare_dns", DisplayName: "Cloudflare DNS", Address: "1.1.1.1", ProbeTypes: []string{"icmp"}, Enabled: true},
+	{TargetID: "cqu_mirror", DisplayName: "CQU 镜像站", Address: "https://mirrors.cqu.edu.cn/", ProbeTypes: []string{"http"}, Enabled: true},
 }
 
-// seed inserts the Protocol v1 §12 targets the first time the table is empty.
-// It never runs again, so an administrator deleting a default target does not
-// get it resurrected on the next restart.
+// seed inserts the Protocol v1 §12 targets, but only while the targets table is
+// completely empty: the guard is COUNT(*) == 0, so the guarantee is "runs once
+// while any target exists", not "runs once ever". Deleting a single target is
+// therefore permanent, but deleting every target re-seeds the full default set
+// on the next Open.
+//
+// Each entry goes through CreateTarget, which already wraps the target row and
+// its probe types in one transaction, so a partial failure cannot leave a
+// default target without its probe types.
 func (s *Store) seed() error {
 	var count int
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM targets`).Scan(&count); err != nil {
@@ -134,28 +137,13 @@ func (s *Store) seed() error {
 		return nil
 	}
 
-	tx, err := s.db.Begin()
-	if err != nil {
-		return fmt.Errorf("store: begin seed: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	now := nowUnix()
-	for _, t := range defaultTargets {
-		if _, err := tx.Exec(`INSERT INTO targets (target_id, display_name, address, description,
-			enabled, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)`,
-			t.TargetID, t.DisplayName, t.Address, t.Description, now, now); err != nil {
-			return fmt.Errorf("store: seed target %s: %w", t.TargetID, err)
+	for i := range defaultTargets {
+		// Copy: CreateTarget stamps CreatedAt/UpdatedAt on the value it is given,
+		// and the package-level defaults must not be mutated.
+		target := defaultTargets[i]
+		if err := s.CreateTarget(&target); err != nil {
+			return fmt.Errorf("store: seed target %s: %w", target.TargetID, err)
 		}
-		for _, pt := range t.ProbeTypes {
-			if _, err := tx.Exec(`INSERT INTO target_probe_types (target_id, probe_type) VALUES (?, ?)`,
-				t.TargetID, pt); err != nil {
-				return fmt.Errorf("store: seed probe type %s/%s: %w", t.TargetID, pt, err)
-			}
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("store: commit seed: %w", err)
 	}
 	return nil
 }
