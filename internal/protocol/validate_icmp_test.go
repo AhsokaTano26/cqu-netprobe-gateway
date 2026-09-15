@@ -32,6 +32,10 @@ func TestValidateICMPAccepts(t *testing.T) {
 			MinRTTMS: nil, AvgRTTMS: nil, MaxRTTMS: nil, JitterMS: nil},
 		"equal rtts": {Success: true, Sent: 4, Received: 4, LossRatio: 0,
 			MinRTTMS: f(5), AvgRTTMS: f(5), MaxRTTMS: f(5), JitterMS: f(0)},
+		// One reply in 2000: 0.9995 is the honest loss ratio, and it is not the
+		// §7 "all packets lost" value, so it must stay valid.
+		"one reply in 2000": {Success: true, Sent: 2000, Received: 1, LossRatio: 0.9995,
+			MinRTTMS: f(1), AvgRTTMS: f(2), MaxRTTMS: f(3), JitterMS: nil},
 	}
 	for name, m := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -94,6 +98,12 @@ func TestValidateICMPRejects(t *testing.T) {
 		"inf sent as rtt": func(m *ICMPResult) {
 			// 1e400 in JSON overflows to +Inf rather than failing to parse.
 			m.MaxRTTMS = f(math.Inf(1))
+		},
+		"loss ratio 1 with replies received": func(m *ICMPResult) {
+			// 1.0 is within lossRatioTolerance of 0.9995, so only the §7
+			// definition of "all packets lost" catches it. Accepting it would
+			// expose icmp_success=1 beside icmp_loss_ratio=1.
+			m.Sent, m.Received, m.LossRatio = 2000, 1, 1.0
 		},
 		"jitter present with received under 2 is allowed, but negative is not": func(m *ICMPResult) {
 			m.Sent, m.Received, m.LossRatio = 5, 1, 0.8

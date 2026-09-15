@@ -119,6 +119,13 @@ func validateICMP(m *ICMPResult) error {
 		return newError(CodeInvalidPayload, "icmp loss_ratio does not match sent and received")
 	}
 
+	// Protocol v1 §7 defines loss_ratio 1.0 as "all packets lost", so it cannot
+	// co-exist with a successful reply. The absolute tolerance above would
+	// otherwise admit loss_ratio 1.0 for large sent counts.
+	if math.Abs(m.LossRatio-1) <= 1e-6 && m.Received != 0 {
+		return newError(CodeInvalidPayload, "icmp loss_ratio of 1 requires no replies received")
+	}
+
 	if m.Received == 0 {
 		// Protocol v1 §8: total loss carries no RTT at all, and success is false.
 		if m.Success {
