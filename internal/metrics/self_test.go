@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -50,17 +51,26 @@ cqu_netprobe_gateway_push_rejected_total{reason="rate_limit"} 1
 	}
 }
 
+// TestIdentityLabelNames pins the frozen label sets element by element.
+// Comparing lengths (and, for the measurement set, only the last element) would
+// accept a permuted first five, which would silently relabel every series: the
+// label names and the values identityLabels returns are zipped positionally.
 func TestIdentityLabelNames(t *testing.T) {
 	want := []string{"probe_id", "campus", "building_group", "building", "network_type"}
-	if len(IdentityLabelNames) != len(want) {
+	if !slices.Equal(IdentityLabelNames, want) {
 		t.Fatalf("IdentityLabelNames = %v, want %v", IdentityLabelNames, want)
 	}
-	for i := range want {
-		if IdentityLabelNames[i] != want[i] {
-			t.Fatalf("IdentityLabelNames[%d] = %q, want %q", i, IdentityLabelNames[i], want[i])
-		}
+	wantMeasurement := append(append([]string{}, want...), "target")
+	if !slices.Equal(MeasurementLabelNames, wantMeasurement) {
+		t.Fatalf("MeasurementLabelNames = %v, want %v", MeasurementLabelNames, wantMeasurement)
 	}
-	if len(MeasurementLabelNames) != len(want)+1 || MeasurementLabelNames[len(want)] != "target" {
-		t.Fatalf("MeasurementLabelNames = %v, want identity labels plus target", MeasurementLabelNames)
+
+	// A Desc declares one label name per value MustNewConstMetric is handed, so
+	// a short identityLabels() panics at *scrape* time and takes /metrics down
+	// with it. The registry's consistency check compares name sets, not arity,
+	// so nothing else catches a dropped value.
+	if got := identityLabels(probe("hx-sy01-aaaaaa")); len(got) != len(IdentityLabelNames) {
+		t.Fatalf("identityLabels() returned %d values, want %d (one per IdentityLabelNames entry)",
+			len(got), len(IdentityLabelNames))
 	}
 }

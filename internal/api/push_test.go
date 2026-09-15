@@ -13,6 +13,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/tano/cqu-netprobe-gateway/internal/latest"
 	"github.com/tano/cqu-netprobe-gateway/internal/metrics"
+	"github.com/tano/cqu-netprobe-gateway/internal/protocol"
 	"github.com/tano/cqu-netprobe-gateway/internal/store"
 	"github.com/tano/cqu-netprobe-gateway/internal/token"
 )
@@ -531,6 +532,29 @@ func TestPushErrorBodyNeverContainsToken(t *testing.T) {
 		if strings.Contains(rec.Body.String(), token.Hash(h.tok)) {
 			t.Fatal("response body leaked the token hash")
 		}
+	}
+}
+
+// TestWriteProtocolErrorIgnoresErrorMessage is the leak guard that
+// TestPushErrorBodyNeverContainsToken cannot be: that test only inspects a body
+// produced by paths whose error values carry no secret, so it would still pass
+// if writeProtocolError interpolated err.Message. This poisons the error with a
+// secret and asserts the response body is the fixed code and message only.
+func TestWriteProtocolErrorIgnoresErrorMessage(t *testing.T) {
+	const secret = "cqu_probe_SUPERSECRETTOKENVALUE"
+	rec := httptest.NewRecorder()
+	writeProtocolError(rec, &protocol.Error{
+		Code:    protocol.CodeInternalError,
+		Message: "SELECT * FROM probes WHERE token_hash = '" + secret + "'",
+	})
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), secret) || strings.Contains(rec.Body.String(), "SELECT") {
+		t.Fatalf("response leaked the error message: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "internal_error") {
+		t.Errorf("body = %s, want the fixed internal_error code", rec.Body.String())
 	}
 }
 

@@ -58,6 +58,18 @@ func TestHashIsDeterministicHex(t *testing.T) {
 	}
 }
 
+// TestHashKnownVector pins the digest itself, not merely its shape. token_hash
+// is persisted, so swapping SHA-256 for any other 32-byte digest would silently
+// invalidate every stored token fleet-wide; the length and hex checks above
+// would accept that. Only a known-answer vector makes the swap fail loudly.
+func TestHashKnownVector(t *testing.T) {
+	// SHA-256("abc").
+	const want = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+	if got := Hash("abc"); got != want {
+		t.Fatalf("Hash(\"abc\") = %q, want %q", got, want)
+	}
+}
+
 func TestHashDiffersForDifferentTokens(t *testing.T) {
 	a, _ := Generate()
 	b, _ := Generate()
