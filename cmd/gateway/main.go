@@ -124,6 +124,11 @@ func run() error {
 			"username", cfg.AdminUsername, "password", pw)
 	}
 
+	// Both servers route net/http's own output — recovered handler panics, TLS
+	// handshake failures, superfluous WriteHeader calls — through the JSON
+	// handler at ERROR level. slog.SetDefault bridges the stdlib log package on
+	// modern Go, but only at INFO, so a recovered panic would otherwise land at
+	// the wrong severity (design §13).
 	publicSrv := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           handler.Push,
@@ -132,6 +137,7 @@ func run() error {
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    16 << 10,
+		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelError),
 	}
 
 	metricsMux := http.NewServeMux()
@@ -144,6 +150,7 @@ func run() error {
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    16 << 10,
+		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelError),
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -151,13 +158,13 @@ func run() error {
 
 	errCh := make(chan error, 2)
 	go func() {
-		logger.Info("push listener started", "addr", cfg.ListenAddr)
+		logger.Info("starting push listener", "addr", cfg.ListenAddr)
 		if err := publicSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- fmt.Errorf("push listener: %w", err)
 		}
 	}()
 	go func() {
-		logger.Info("metrics listener started", "addr", cfg.MetricsAddr,
+		logger.Info("starting metrics listener", "addr", cfg.MetricsAddr,
 			"allowed_cidrs", len(cfg.MetricsAllowedCIDRs))
 		if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- fmt.Errorf("metrics listener: %w", err)

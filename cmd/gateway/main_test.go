@@ -3,6 +3,8 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +16,11 @@ import (
 	"github.com/tano/cqu-netprobe-gateway/internal/store"
 	"github.com/tano/cqu-netprobe-gateway/internal/token"
 )
+
+// adminSessionCookieName mirrors the unexported constant in
+// internal/admin/server.go. A rename there fails the login step below loudly
+// instead of quietly skipping the authenticated request.
+const adminSessionCookieName = "netprobe_admin_session"
 
 func TestBuildMetricsHandler(t *testing.T) {
 	st, err := store.Open(t.TempDir() + "/m.db")
@@ -95,8 +102,106 @@ func TestBuildPushMuxServesPushAndAdmin(t *testing.T) {
 	}
 }
 
-func TestGeneratedPasswordIsLoggedOnce(t *testing.T) {
-	// The generated password must be surfaced exactly once, at startup.
+// TestAdminRenderReachesWiredLatestAndThreshold pins two wiring hazards that are
+// otherwise invisible: a nil Deps.Latest and a dropped OnlineThreshold. Both are
+// reachable only through an authenticated render of the dashboard, because
+// requireSession redirects an anonymous visitor before any page is built, and
+// handleProbeList touches latest/onlineThreshold only inside its per-probe loop.
+//
+// net/http recovers handler panics per connection, so the first hazard would
+// leave the process up and only break authenticated admin pages — no other test
+// in this package (or admin's) would notice.
+func TestAdminRenderReachesWiredLatestAndThreshold(t *testing.T) {
+	st, err := store.Open(t.TempDir() + "/wire.db")
+	if err != nil {
+		t.Fatalf("store.Open() error = %v", err)
+	}
+	defer func() { _ = st.Close() }()
+
+	// Non-default on purpose: 30s is admin's own fallback, so asserting it would
+	// not tell "wired through" apart from "silently fell back to the default".
+	const onlineThreshold = 7 * time.Second
+	cfg := &config.Config{
+		AdminUsername:   "admin",
+		AdminPassword:   "test-password-value",
+		PublicBaseURL:   "https://netprobe.example.com",
+		OnlineThreshold: onlineThreshold,
+		RateLimit:       5 * time.Second,
+		RateLimitBurst:  3,
+		DataDir:         t.TempDir(),
+	}
+
+	handler, err := buildHandler(cfg, st, prometheus.NewRegistry())
+	if err != nil {
+		t.Fatalf("buildHandler() error = %v", err)
+	}
+
+	// Enabled is load-bearing: onlineState returns before touching the latest
+	// store for a disabled probe, which would make the render below vacuous.
+	tok := "cqu_probe_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	if err := st.CreateProbe(&store.Probe{
+		ProbeID: "hx-sy01-aaaaaa", TokenHash: token.Hash(tok),
+		CampusCode: "hx", CampusName: "虎溪",
+		BuildingGroupCode: "sy", BuildingGroupName: "松园",
+		BuildingCode: "sy01", BuildingName: "松园一栋",
+		NetworkType: "wired", Enabled: true,
+	}); err != nil {
+		t.Fatalf("CreateProbe() error = %v", err)
+	}
+
+	// POST /admin/login is deliberately not wrapped in requireCSRF, so a session
+	// is reachable without first scraping a token out of the login form.
+	login := httptest.NewRequest(http.MethodPost, "/admin/login", strings.NewReader(url.Values{
+		"username": {"admin"},
+		"password": {"test-password-value"},
+	}.Encode()))
+	login.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	handler.Push.ServeHTTP(rec, login)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("login status = %d, want 303; body = %s", rec.Code, rec.Body.String())
+	}
+	var session *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == adminSessionCookieName {
+			session = c
+		}
+	}
+	if session == nil {
+		t.Fatalf("login did not set a %q cookie", adminSessionCookieName)
+	}
+
+	// The dashboard calls s.latest.Get for every enabled probe, so a nil Latest
+	// panics here rather than at build time.
+	dash := httptest.NewRequest(http.MethodGet, "/admin", nil)
+	dash.AddCookie(session)
+	rec = httptest.NewRecorder()
+	handler.Push.ServeHTTP(rec, dash)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("authenticated GET /admin = %d, want 200; body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "hx-sy01-aaaaaa") {
+		t.Error("dashboard did not render the probe row, so the list never reached onlineState")
+	}
+
+	// onlineThreshold is unexported, so reflection is the only way to observe the
+	// wiring. If the field is renamed this fails loudly instead of passing on a
+	// zero value.
+	field := reflect.ValueOf(handler.Admin).Elem().FieldByName("onlineThreshold")
+	if !field.IsValid() {
+		t.Fatal("admin.Server has no onlineThreshold field; update this test")
+	}
+	if got := time.Duration(field.Int()); got != onlineThreshold {
+		t.Errorf("admin onlineThreshold = %s, want %s (the configured value, not the default)",
+			got, onlineThreshold)
+	}
+}
+
+// TestGeneratedPasswordIsGeneratedOnce pins the store-backed half of the
+// "log it exactly once" contract: main logs the plaintext when
+// PasswordGeneration reports one, so a restart that minted a fresh password
+// would silently invalidate the copy the operator already saved.
+func TestGeneratedPasswordIsGeneratedOnce(t *testing.T) {
 	st, err := store.Open(t.TempDir() + "/g.db")
 	if err != nil {
 		t.Fatalf("store.Open() error = %v", err)
@@ -110,16 +215,30 @@ func TestGeneratedPasswordIsLoggedOnce(t *testing.T) {
 		RateLimitBurst:  3,
 		DataDir:         t.TempDir(),
 	}
-	h, err := buildHandler(cfg, st, prometheus.NewRegistry())
+	first, err := buildHandler(cfg, st, prometheus.NewRegistry())
 	if err != nil {
 		t.Fatalf("buildHandler() error = %v", err)
 	}
-	pw, generated := h.Admin.PasswordGeneration()
+	pw, generated := first.Admin.PasswordGeneration()
 	if !generated {
 		t.Fatal("no password was generated")
 	}
 	if len(pw) < 32 {
 		t.Errorf("generated password is %d chars, want >= 32", len(pw))
+	}
+
+	// The same store, constructed again: this is the restarted-process path, on
+	// which the stored hash must be reused and no plaintext handed out.
+	second, err := buildHandler(cfg, st, prometheus.NewRegistry())
+	if err != nil {
+		t.Fatalf("second buildHandler() error = %v", err)
+	}
+	again, generatedAgain := second.Admin.PasswordGeneration()
+	if generatedAgain {
+		t.Error("a new password was generated on restart; it must be generated once")
+	}
+	if again != "" {
+		t.Errorf("PasswordGeneration() = %q on a restart, want no plaintext at all", again)
 	}
 }
 
