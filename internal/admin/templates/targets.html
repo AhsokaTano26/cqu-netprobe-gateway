@@ -33,6 +33,7 @@
 <div class="card">
   <h2>新增 / 修改 Target</h2>
   <p class="muted">修改已有 Target 时，Target ID 填已存在的 ID 即可覆盖其配置。</p>
+  {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
   <form method="post" action="/admin/targets/new">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <label>Target ID（小写字母、数字、下划线）
