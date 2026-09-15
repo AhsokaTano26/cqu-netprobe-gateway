@@ -1,0 +1,10 @@
+.git
+.claude
+docs/superpowers
+data
+*.db
+*.db-shm
+*.db-wal
+.env
+gateway
+dist

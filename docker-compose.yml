@@ -1,0 +1,31 @@
+services:
+  gateway:
+    image: ghcr.io/tano/cqu-netprobe-gateway:${IMAGE_TAG:-latest}
+    build:
+      context: .
+      args:
+        VERSION: ${IMAGE_TAG:-dev}
+    container_name: cqu-netprobe-gateway
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    ports:
+      # Public listener: push API + admin UI. Put this behind a TLS terminator.
+      - "${LISTEN_ADDR:-0.0.0.0:8080}:8080"
+      # Metrics listener is deliberately NOT published to the host by default.
+      # Uncomment only when Prometheus runs on a different machine, and keep
+      # METRICS_ALLOWED_CIDRS set so the IP allowlist still applies.
+      # - "127.0.0.1:9090:9090"
+
+    volumes:
+      - ./data:/data
+
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    stop_grace_period: 20s
