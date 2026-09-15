@@ -22,11 +22,11 @@ func (r *PushRequest) Validate(al Allowlist) error {
 	if r.Timestamp < 0 {
 		return newError(CodeInvalidPayload, "timestamp must not be negative")
 	}
-	if len([]byte(r.ProbeVersion)) > MaxProbeVersionLen {
+	if len(r.ProbeVersion) > MaxProbeVersionLen {
 		return newError(CodeInvalidPayload, "probe_version is too long")
 	}
 	if len(r.Results) == 0 {
-		// Protocol v1 §14 only refreshes last_seen on a fully valid push. An
+		// Protocol v1 §23 only refreshes last_seen on a fully valid push. An
 		// empty result set is vacuously valid, which would let a broken probe
 		// stay "online" forever while measuring nothing.
 		return newError(CodeInvalidPayload, "results must contain at least one measurement")

@@ -112,6 +112,31 @@ func TestValidateAcceptsMaxLengthProbeVersion(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsMultibyteProbeVersionOverByteLimit(t *testing.T) {
+	// Protocol v1 §6 caps probe_version at 32 *bytes*, not 32 runes. 11 copies
+	// of "测" are 33 bytes but only 11 runes, so a rune-counting implementation
+	// would wrongly accept this. The ASCII fixtures above cannot tell the two
+	// rules apart; this one pins the byte semantics.
+	long := strings.Repeat("测", 11)
+	if len(long) != 33 {
+		t.Fatalf("fixture is %d bytes, want 33", len(long))
+	}
+	body := `{"version":1,"timestamp":1,"probe_version":"` + long + `","results":{"aliyun_dns":{"icmp":{"success":true,"sent":1,"received":1,"loss_ratio":0,"min_rtt_ms":1,"avg_rtt_ms":1,"max_rtt_ms":1,"jitter_ms":null}}}}`
+	assertCode(t, decodeOrFail(t, body).Validate(testAllowlist()), CodeInvalidPayload)
+}
+
+func TestValidateAcceptsMultibyteProbeVersionUnderByteLimit(t *testing.T) {
+	// 10 copies of "测" are 30 bytes / 10 runes: under the 32-byte cap.
+	exact := strings.Repeat("测", 10)
+	if len(exact) != 30 {
+		t.Fatalf("fixture is %d bytes, want 30", len(exact))
+	}
+	body := `{"version":1,"timestamp":1,"probe_version":"` + exact + `","results":{"aliyun_dns":{"icmp":{"success":true,"sent":1,"received":1,"loss_ratio":0,"min_rtt_ms":1,"avg_rtt_ms":1,"max_rtt_ms":1,"jitter_ms":null}}}}`
+	if err := decodeOrFail(t, body).Validate(testAllowlist()); err != nil {
+		t.Fatalf("30-byte multibyte probe_version should be accepted, got %v", err)
+	}
+}
+
 func TestValidateRejectsMeasurementFailure(t *testing.T) {
 	body := `{"version":1,"timestamp":1,"probe_version":"1","results":{"aliyun_dns":{"icmp":{"success":true,"sent":5,"received":0,"loss_ratio":1.0,"min_rtt_ms":null,"avg_rtt_ms":null,"max_rtt_ms":null,"jitter_ms":null}}}}`
 	assertCode(t, decodeOrFail(t, body).Validate(testAllowlist()), CodeInvalidPayload)
@@ -120,15 +145,32 @@ func TestValidateRejectsMeasurementFailure(t *testing.T) {
 func TestValidateReportsFirstErrorDeterministically(t *testing.T) {
 	// Two bad targets; the error must be stable across runs so operators can
 	// correlate logs. Validate walks targets in sorted order.
-	body := `{"version":1,"timestamp":1,"probe_version":"1","results":{"zzz_bad":{"icmp":{"success":true,"sent":1,"received":1,"loss_ratio":0,"min_rtt_ms":1,"avg_rtt_ms":1,"max_rtt_ms":1,"jitter_ms":null}},"aaa_bad":{"icmp":{"success":true,"sent":1,"received":1,"loss_ratio":0,"min_rtt_ms":1,"avg_rtt_ms":1,"max_rtt_ms":1,"jitter_ms":null}}}}`
+	//
+	// The two failures MUST stay different in kind, and this is the whole point
+	// of the fixture: aliyun_dns is allowlisted and fails measurement validation
+	// (received == 0 with success == true violates Protocol v1 §7) giving
+	// CodeInvalidPayload, while zzz_unknown is not allowlisted at all giving
+	// CodeInvalidTarget. Two identically-failing targets would produce
+	// byte-identical errors, so every visitation order would yield the same
+	// value and this test would pass even with the sort deleted. Do not
+	// "simplify" the fixture back to two unknowns.
+	//
+	// Sorted order visits aliyun_dns first, so the first error is always
+	// CodeInvalidPayload. Without the sort, Go's randomised map iteration
+	// returns CodeInvalidTarget about half the time, which the 20 iterations
+	// below catch with probability 1 - 2^-20.
+	body := `{"version":1,"timestamp":1,"probe_version":"1","results":{` +
+		`"aliyun_dns":{"icmp":{"success":true,"sent":5,"received":0,"loss_ratio":1.0,"min_rtt_ms":null,"avg_rtt_ms":null,"max_rtt_ms":null,"jitter_ms":null}},` +
+		`"zzz_unknown":{"icmp":{"success":true,"sent":1,"received":1,"loss_ratio":0,"min_rtt_ms":1,"avg_rtt_ms":1,"max_rtt_ms":1,"jitter_ms":null}}}}`
 	for i := 0; i < 20; i++ {
 		err := decodeOrFail(t, body).Validate(testAllowlist())
 		var pe *Error
 		if !errors.As(err, &pe) {
-			t.Fatalf("want *Error, got %T", err)
+			t.Fatalf("iteration %d: want *Error, got %T", i, err)
 		}
-		if pe.Code != CodeInvalidTarget {
-			t.Fatalf("code = %q, want %q", pe.Code, CodeInvalidTarget)
+		if pe.Code != CodeInvalidPayload {
+			t.Fatalf("iteration %d: code = %q, want %q (targets must be visited in sorted order)",
+				i, pe.Code, CodeInvalidPayload)
 		}
 	}
 }
