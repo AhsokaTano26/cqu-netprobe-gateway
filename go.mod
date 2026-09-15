@@ -1,9 +1,10 @@
 module github.com/tano/cqu-netprobe-gateway
 
-go 1.26
+go 1.26.0
 
 require (
 	github.com/prometheus/client_golang v1.24.1
+	golang.org/x/time v0.16.0
 	modernc.org/sqlite v1.59.0
 )
 
