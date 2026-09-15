@@ -1,0 +1,1225 @@
+# CQU NetProbe Protocol v1
+
+本文档定义 `cqu-netprobe` 与 `cqu-netprobe-gateway` 之间的通信协议。
+
+协议版本：`1`
+
+两个项目必须严格遵守本文档。任何破坏兼容性的修改必须升级协议版本，不得单方面修改字段名称、类型、单位或语义。
+
+---
+
+# 1. 通信模型
+
+通信方向：
+
+```text
+cqu-netprobe
+      │
+      │ HTTPS POST
+      ▼
+cqu-netprobe-gateway
+      │
+      │ /metrics
+      ▼
+Prometheus
+```
+
+Probe 主动向 Gateway 上报。
+
+Gateway 不主动连接 Probe。
+
+Probe 不直接与 Prometheus 通信。
+
+---
+
+# 2. Push Endpoint
+
+固定 API：
+
+```text
+POST /api/v1/push
+```
+
+生产环境必须使用 HTTPS。
+
+示例：
+
+```text
+https://netprobe.example.com/api/v1/push
+```
+
+---
+
+# 3. HTTP Request
+
+必须包含：
+
+```http
+POST /api/v1/push HTTP/1.1
+Host: netprobe.example.com
+Authorization: Bearer <TOKEN>
+Content-Type: application/json
+User-Agent: cqu-netprobe/<VERSION>
+```
+
+## Authorization
+
+格式固定：
+
+```text
+Authorization: Bearer <TOKEN>
+```
+
+例如：
+
+```text
+Authorization: Bearer cqu_probe_xxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+Token 由 Gateway 生成。
+
+Probe 不解析 Token。
+
+Probe 只负责原样保存和发送。
+
+Token 不允许：
+
+- 写入日志；
+- 上传到其他服务器；
+- 作为 JSON 字段发送；
+- 作为 Prometheus Label。
+
+---
+
+# 4. Content-Type
+
+固定：
+
+```text
+application/json
+```
+
+允许：
+
+```text
+application/json; charset=utf-8
+```
+
+其他 Content-Type Gateway 返回：
+
+```text
+415 Unsupported Media Type
+```
+
+---
+
+# 5. Request Body
+
+v1 请求结构固定如下：
+
+```json
+{
+  "version": 1,
+  "timestamp": 1789490000,
+  "probe_version": "0.1.0",
+  "results": {
+    "aliyun_dns": {
+      "icmp": {
+        "success": true,
+        "sent": 5,
+        "received": 5,
+        "loss_ratio": 0.0,
+        "min_rtt_ms": 10.2,
+        "avg_rtt_ms": 12.3,
+        "max_rtt_ms": 15.8,
+        "jitter_ms": 1.4
+      }
+    },
+    "campus_dns": {
+      "dns": {
+        "success": true,
+        "duration_ms": 8.4
+      }
+    },
+    "cqu_mirror": {
+      "http": {
+        "success": true,
+        "status_code": 200,
+        "duration_ms": 51.2
+      }
+    }
+  }
+}
+```
+
+---
+
+# 6. 顶层字段
+
+## version
+
+类型：
+
+```text
+integer
+```
+
+v1 固定：
+
+```json
+"version": 1
+```
+
+Gateway 收到不支持的版本：
+
+```text
+400 Bad Request
+```
+
+错误代码：
+
+```text
+unsupported_version
+```
+
+---
+
+## timestamp
+
+类型：
+
+```text
+integer
+```
+
+单位：
+
+```text
+Unix Timestamp Seconds
+```
+
+含义：
+
+Probe 完成本轮测量时的本地 Unix 时间。
+
+例如：
+
+```json
+"timestamp": 1789490000
+```
+
+注意：
+
+该时间仅作为测量辅助信息。
+
+Gateway 判断 Probe 在线状态必须使用：
+
+```text
+server_received_at
+```
+
+即 Gateway 成功接收到合法 Push 的服务器时间。
+
+不得使用客户端 timestamp 作为 `last_seen`。
+
+---
+
+## probe_version
+
+类型：
+
+```text
+string
+```
+
+格式建议：
+
+```text
+Semantic Versioning
+```
+
+例如：
+
+```json
+"probe_version": "0.1.0"
+```
+
+最大长度：
+
+```text
+32 bytes
+```
+
+不得将 `probe_version` 作为高基数 Prometheus Label 使用。
+
+---
+
+## results
+
+类型：
+
+```text
+object
+```
+
+Key 为固定 Target ID。
+
+例如：
+
+```text
+aliyun_dns
+dnspod_dns
+cloudflare_dns
+campus_dns
+cqu_mirror
+```
+
+Target ID 必须由双方代码共同定义。
+
+Probe 不允许自行产生新的 Target ID。
+
+Gateway 必须维护 Target Allowlist。
+
+---
+
+# 7. ICMP Result
+
+结构：
+
+```json
+{
+  "icmp": {
+    "success": true,
+    "sent": 5,
+    "received": 5,
+    "loss_ratio": 0.0,
+    "min_rtt_ms": 10.2,
+    "avg_rtt_ms": 12.3,
+    "max_rtt_ms": 15.8,
+    "jitter_ms": 1.4
+  }
+}
+```
+
+字段定义：
+
+```text
+success       boolean
+sent          integer
+received      integer
+loss_ratio    number
+min_rtt_ms    number
+avg_rtt_ms    number
+max_rtt_ms    number
+jitter_ms     number
+```
+
+约束：
+
+```text
+sent > 0
+
+0 <= received <= sent
+
+loss_ratio =
+(sent - received) / sent
+
+0 <= loss_ratio <= 1
+
+min_rtt_ms >= 0
+avg_rtt_ms >= 0
+max_rtt_ms >= 0
+jitter_ms >= 0
+```
+
+RTT 单位统一：
+
+```text
+milliseconds
+```
+
+### success 定义
+
+只要本轮至少收到一个合法 ICMP Reply：
+
+```text
+success = true
+```
+
+即：
+
+```text
+received > 0
+```
+
+全部丢包：
+
+```text
+success = false
+received = 0
+loss_ratio = 1.0
+```
+
+---
+
+# 8. ICMP 全部失败时的数据格式
+
+如果：
+
+```text
+sent = 5
+received = 0
+```
+
+必须：
+
+```json
+{
+  "icmp": {
+    "success": false,
+    "sent": 5,
+    "received": 0,
+    "loss_ratio": 1.0,
+    "min_rtt_ms": null,
+    "avg_rtt_ms": null,
+    "max_rtt_ms": null,
+    "jitter_ms": null
+  }
+}
+```
+
+不得：
+
+```text
+RTT = 0
+```
+
+因为：
+
+```text
+0 ms
+```
+
+与：
+
+```text
+没有测量结果
+```
+
+语义不同。
+
+因此无有效 RTT 时统一使用：
+
+```text
+null
+```
+
+Gateway 不为 null RTT 暴露对应 RTT Metric。
+
+---
+
+# 9. Jitter 定义
+
+为了避免两个开发者实现不同算法，v1 明确定义：
+
+假设成功收到的 RTT 为：
+
+```text
+r1, r2, ..., rn
+```
+
+jitter 定义为相邻成功 RTT 差值绝对值的平均：
+
+```text
+jitter =
+(|r2-r1| + |r3-r2| + ... + |rn-r(n-1)|)
+/
+(n-1)
+```
+
+如果：
+
+```text
+received < 2
+```
+
+则：
+
+```json
+"jitter_ms": null
+```
+
+---
+
+# 10. DNS Result
+
+格式：
+
+```json
+{
+  "dns": {
+    "success": true,
+    "duration_ms": 8.4
+  }
+}
+```
+
+字段：
+
+```text
+success       boolean
+duration_ms   number | null
+```
+
+单位：
+
+```text
+milliseconds
+```
+
+成功：
+
+```json
+{
+  "success": true,
+  "duration_ms": 8.4
+}
+```
+
+失败：
+
+```json
+{
+  "success": false,
+  "duration_ms": null
+}
+```
+
+v1 不上传具体错误字符串。
+
+避免：
+
+- 泄露不必要信息；
+- 出现任意字符串；
+- 增加协议复杂度。
+
+错误原因只记录在 Probe 本地日志。
+
+---
+
+# 11. HTTP Result
+
+格式：
+
+```json
+{
+  "http": {
+    "success": true,
+    "status_code": 200,
+    "duration_ms": 51.2
+  }
+}
+```
+
+字段：
+
+```text
+success        boolean
+status_code    integer | null
+duration_ms    number | null
+```
+
+## success 定义
+
+v1 固定定义：
+
+```text
+HTTP 200 <= status_code < 400
+```
+
+则：
+
+```text
+success = true
+```
+
+例如：
+
+```text
+200 → true
+204 → true
+301 → true
+302 → true
+404 → false
+500 → false
+```
+
+如果 TCP/TLS/HTTP 请求根本没有获得 HTTP Response：
+
+```json
+{
+  "success": false,
+  "status_code": null,
+  "duration_ms": null
+}
+```
+
+如果成功获得 HTTP Response，但状态码表示失败：
+
+```json
+{
+  "success": false,
+  "status_code": 500,
+  "duration_ms": 63.2
+}
+```
+
+---
+
+# 12. Target 定义
+
+v1 Target 必须在双方代码中统一定义。
+
+建议建立共同文档：
+
+```text
+docs/targets-v1.md
+```
+
+例如：
+
+```text
+ID                TYPE       TARGET
+------------------------------------------------
+campus_dns        ICMP/DNS   <校园 DNS>
+aliyun_dns        ICMP       223.5.5.5
+dnspod_dns        ICMP       119.29.29.29
+cloudflare_dns    ICMP       1.1.1.1
+cqu_mirror        HTTP       https://mirrors.cqu.edu.cn/
+```
+
+正式开发前双方必须共同确认实际 Target。
+
+Target ID 一旦进入 v1 正式版本：
+
+不得随意重命名。
+
+例如：
+
+```text
+aliyun_dns
+```
+
+以后不能直接改成：
+
+```text
+alidns
+```
+
+否则 Prometheus 历史时序会产生新的 Series。
+
+---
+
+# 13. 一个 Target 可以包含多个 Probe Type
+
+允许：
+
+```json
+"campus_dns": {
+  "icmp": {
+    ...
+  },
+  "dns": {
+    ...
+  }
+}
+```
+
+因此：
+
+```text
+Target
+ ├── ICMP
+ ├── DNS
+ └── HTTP
+```
+
+协议上允许多个测试类型共存。
+
+但必须符合服务器预定义的：
+
+```text
+Target × ProbeType Allowlist
+```
+
+例如如果：
+
+```text
+cqu_mirror
+```
+
+只允许：
+
+```text
+HTTP
+```
+
+客户端发送：
+
+```text
+cqu_mirror.icmp
+```
+
+Gateway 应拒绝。
+
+---
+
+# 14. Gateway Response
+
+成功固定：
+
+```http
+HTTP/1.1 204 No Content
+```
+
+无 Response Body。
+
+Probe 收到：
+
+```text
+200 <= status < 300
+```
+
+均可以视为 Push 成功。
+
+但 Gateway 标准实现固定返回：
+
+```text
+204
+```
+
+---
+
+# 15. Error Response
+
+错误统一使用 JSON：
+
+```json
+{
+  "error": {
+    "code": "invalid_payload",
+    "message": "invalid measurement payload"
+  }
+}
+```
+
+Content-Type：
+
+```text
+application/json
+```
+
+错误信息不得：
+
+- 返回 Token；
+- 返回 Token Hash；
+- 返回 SQL；
+- 返回 Stack Trace；
+- 返回服务器内部路径。
+
+---
+
+# 16. HTTP Status Code
+
+双方统一：
+
+```text
+204
+Push 成功
+
+400
+JSON 或测量数据不合法
+
+401
+Token 缺失、格式错误或无效
+
+403
+Probe 已被禁用
+
+405
+Method 不允许
+
+413
+Request Body 过大
+
+415
+Content-Type 不支持
+
+429
+Rate Limit
+
+500
+Gateway 内部错误
+
+503
+Gateway 暂时不可用
+```
+
+---
+
+# 17. Error Code
+
+v1 至少定义：
+
+```text
+invalid_request
+invalid_json
+invalid_payload
+unsupported_version
+invalid_target
+invalid_probe_type
+unauthorized
+probe_disabled
+rate_limited
+internal_error
+service_unavailable
+```
+
+Probe 不需要根据 `message` 判断逻辑。
+
+程序逻辑只能依据：
+
+HTTP Status Code
+
+必要时再依据：
+
+error.code
+
+---
+
+# 18. Retry 行为
+
+Probe Push 失败后：
+
+不得立即无限重试。
+
+正常测量周期：
+
+```text
+10 seconds
+```
+
+如果 Push 失败：
+
+保存最新一轮结果即可。
+
+下一正常周期继续 Push。
+
+第一版：
+
+不补传全部历史数据。
+
+因此：
+
+```text
+T0 测量
+Push Failed
+
+T+10 测量
+Push Failed
+
+T+20 测量
+Push Success
+```
+
+Gateway 只收到 T+20 最新数据。
+
+这是预期行为。
+
+---
+
+# 19. HTTP Timeout
+
+Probe → Gateway：
+
+推荐：
+
+```text
+connect timeout: 3s
+overall request timeout: 5s
+```
+
+不得因为 Gateway 不可达阻塞下一轮程序运行。
+
+---
+
+# 20. Request Body Limit
+
+v1 Gateway 最大接受：
+
+```text
+64 KiB
+```
+
+即：
+
+```text
+65536 bytes
+```
+
+超过：
+
+```text
+413 Payload Too Large
+```
+
+正常请求应该远小于该值。
+
+---
+
+# 21. Rate Limit
+
+正常：
+
+```text
+1 Push / 10 seconds / Token
+```
+
+Gateway 推荐允许：
+
+```text
+burst = 3
+```
+
+建议 Token Bucket：
+
+```text
+rate = 0.2 requests/second
+burst = 3
+```
+
+即长期允许：
+
+```text
+1 request / 5 seconds
+```
+
+但正常客户端仍固定约：
+
+```text
+1 request / 10 seconds
+```
+
+这样可以容忍：
+
+- jitter；
+- 网络恢复；
+- 程序重启；
+- 调度偏差。
+
+HTTP 429 后 Probe 不进行特殊高速重试。
+
+等待下一正常周期。
+
+---
+
+# 22. Probe 身份
+
+Probe Request 不发送：
+
+```text
+probe_id
+campus
+building
+network_type
+```
+
+Gateway：
+
+```text
+Authorization Token
+        ↓
+查询数据库
+        ↓
+probe_id
+campus
+building
+network_type
+```
+
+例如数据库：
+
+```text
+TOKEN
+  ↓
+probe_id = hx-sy01-a83f21
+campus = huxi
+building = songyuan_1
+network_type = wired
+```
+
+客户端对此信息没有控制权。
+
+---
+
+# 23. Gateway last_seen
+
+只有满足：
+
+```text
+Token 合法
++
+Probe enabled
++
+JSON 合法
++
+协议版本合法
++
+全部 measurement validation 通过
+```
+
+Gateway 才更新：
+
+```text
+last_seen
+```
+
+收到请求 ≠ Probe 有效在线。
+
+无效 Push 不得刷新 last_seen。
+
+---
+
+# 24. Prometheus 时间单位
+
+Probe → Gateway JSON：
+
+```text
+RTT / Duration 使用 milliseconds
+```
+
+原因是方便客户端实现和 JSON 阅读。
+
+Gateway → Prometheus：
+
+统一转换为：
+
+```text
+seconds
+```
+
+例如：
+
+```json
+"avg_rtt_ms": 12.3
+```
+
+转换：
+
+```text
+campus_probe_icmp_rtt_seconds 0.0123
+```
+
+Prometheus Metric 遵循 Prometheus Base Units。
+
+---
+
+# 25. Prometheus Labels
+
+Gateway 根据 Token 添加：
+
+```text
+probe_id
+campus
+building
+network_type
+target
+```
+
+例如：
+
+```text
+campus_probe_icmp_rtt_seconds{
+  probe_id="hx-sy01-a83f21",
+  campus="huxi",
+  building="songyuan_1",
+  network_type="wired",
+  target="aliyun_dns"
+} 0.0123
+```
+
+Probe 无权控制前四项。
+
+`target` 虽然来自 Payload Key，但必须经过 Gateway Allowlist 验证。
+
+---
+
+# 26. 在线状态
+
+Gateway 根据服务器自己的：
+
+```text
+last_seen
+```
+
+计算。
+
+v1：
+
+```text
+age <= 30 seconds
+→ online = 1
+
+age > 30 seconds
+→ online = 0
+```
+
+Prometheus：
+
+```text
+campus_probe_online{...} 1
+```
+
+或：
+
+```text
+campus_probe_online{...} 0
+```
+
+同时暴露：
+
+```text
+campus_probe_last_seen_timestamp_seconds{...}
+```
+
+---
+
+# 27. Stale Measurement
+
+v1 固定：
+
+```text
+stale threshold = 30 seconds
+```
+
+如果：
+
+```text
+now - last_seen > 30 seconds
+```
+
+Gateway：
+
+继续暴露：
+
+```text
+campus_probe_online 0
+campus_probe_last_seen_timestamp_seconds
+```
+
+但停止暴露：
+
+```text
+ICMP RTT
+ICMP loss
+ICMP jitter
+DNS duration
+HTTP duration
+HTTP status
+```
+
+避免 Grafana 把旧数据误认为当前状态。
+
+---
+
+# 28. Gateway 不应信任的数据
+
+以下内容全部视为不可信：
+
+```text
+timestamp
+probe_version
+results
+target
+measurement value
+```
+
+必须验证。
+
+以下身份信息只允许来自 Gateway Database：
+
+```text
+probe_id
+campus
+building
+network_type
+enabled
+```
+
+---
+
+# 29. 未知 JSON 字段
+
+为了保证 v1 客户端和 Gateway 演进可控：
+
+v1 Gateway 对未知顶层字段：
+
+```text
+忽略
+```
+
+对未知：
+
+```text
+Target
+Probe Type
+```
+
+必须拒绝整个 Push：
+
+```text
+400
+invalid_target
+
+或
+
+400
+invalid_probe_type
+```
+
+这样未来可以增加可选 metadata，而不会轻易破坏兼容性。
+
+---
+
+# 30. 安全要求
+
+必须：
+
+- HTTPS；
+- Bearer Token；
+- Token 至少 256 bit 随机熵；
+- Gateway 数据库不保存 Token 明文；
+- 日志不输出 Token；
+- Body ≤ 64 KiB；
+- Rate Limit；
+- JSON Validation；
+- Target Allowlist；
+- Probe Type Allowlist；
+- 数值范围 Validation。
+
+不得使用来源 IP 判断 Probe 身份。
+
+因为校园 NAT、IPv4/IPv6、网络切换均可能改变来源地址。
+
+---
+
+# 31. v1 协议冻结原则
+
+以下内容属于 v1 ABI/API：
+
+```text
+/api/v1/push
+
+Authorization 格式
+
+JSON 字段名称
