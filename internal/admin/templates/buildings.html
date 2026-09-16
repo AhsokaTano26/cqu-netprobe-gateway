@@ -6,39 +6,73 @@
     楼栋群（如「松园」）进 <code>building_group</code> Label——请从已有分组中选择，手打新值会产生无法合并的 Series。
   </p>
   {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+  {{with .Pages.report}}
+    <p class="notice">
+      导入完成：新增 <strong>{{.Added}}</strong> 个，跳过 {{len .Skipped}} 个（已存在），失败 {{len .Failed}} 个。
+    </p>
+    {{if .Skipped}}<p class="muted">已存在，未改动：{{join .Skipped}}</p>{{end}}
+    {{if .Failed}}
+      <ul class="errors">
+        {{range .Failed}}<li>{{.}}</li>{{end}}
+      </ul>
+    {{end}}
+  {{end}}
+
+  <p class="filters">
+    <a href="/admin/buildings" class="{{if not .Pages.filterCampus}}active{{end}}">全部 {{.Pages.total}}</a>
+    {{$f := .Pages.filterCampus}}
+    {{range .Pages.campusCounts}}
+      <a href="/admin/buildings?campus={{.Code}}" class="{{if eq .Code $f}}active{{end}}">{{.Name}} {{.Count}}</a>
+    {{end}}
+  </p>
+
+  {{$csrf := .CSRF}}
   <table>
-    <thead><tr><th>校区</th><th>代号</th><th>显示名</th><th>楼栋群</th><th>操作</th></tr></thead>
+    <thead><tr><th>代号</th><th>显示名</th><th>楼栋群</th><th>操作</th></tr></thead>
     <tbody>
-    {{$csrf := .CSRF}}
-    {{range .Pages.rows}}
+    {{range .Pages.blocks}}
+      <tr class="block-head">
+        <td colspan="4">{{.CampusName}} <span class="muted">({{.CampusCode}})</span> · {{len .Rows}} 栋</td>
+      </tr>
+      {{range .Rows}}
       <tr>
-        <td>{{.CampusName}} <span class="muted">({{.Building.CampusCode}})</span></td>
         <td><code>{{.Building.Code}}</code></td>
-        <td>
-          <form method="post" action="/admin/buildings/{{.Building.Code}}/update" class="inline">
-            <input type="hidden" name="csrf" value="{{$csrf}}">
-            <input type="hidden" name="code" value="{{.Building.Code}}">
-            <input type="hidden" name="campus_code" value="{{.Building.CampusCode}}">
-            <input type="text" name="name" value="{{.Building.Name}}" required>
-            <input type="text" name="building_group_code" value="{{.Building.BuildingGroupCode}}"
-                   list="group-codes" required size="6">
-            <input type="text" name="building_group_name" value="{{.Building.BuildingGroupName}}"
-                   list="group-names" required size="8">
-            <button type="submit">保存</button>
-          </form>
-        </td>
+        <td>{{.Building.Name}}</td>
         <td><code>{{.Building.BuildingGroupCode}}</code> {{.Building.BuildingGroupName}}</td>
         <td class="actions">
+          {{/* The edit form is hidden until asked for: with three inputs per row
+               a campus of thirty buildings is ninety boxes on screen. */}}
+          <details class="inline-edit">
+            <summary>编辑</summary>
+            <form method="post" action="/admin/buildings/{{.Building.Code}}/update">
+              <input type="hidden" name="csrf" value="{{$csrf}}">
+              <input type="hidden" name="filter" value="{{$f}}">
+              <label>显示名
+                <input type="text" name="name" value="{{.Building.Name}}" required>
+              </label>
+              <label>楼栋群代号（进 Label）
+                <input type="text" name="building_group_code" value="{{.Building.BuildingGroupCode}}"
+                       list="group-codes" required size="8">
+              </label>
+              <label>楼栋群显示名
+                <input type="text" name="building_group_name" value="{{.Building.BuildingGroupName}}"
+                       list="group-names" required size="10">
+              </label>
+              <button type="submit">保存</button>
+            </form>
+          </details>
           <form method="post" action="/admin/buildings/{{.Building.Code}}/delete"
                 data-confirm="确定删除楼栋 {{.Building.Code}}？"
                 onsubmit="return confirm('确定删除楼栋 {{.Building.Code}}？');">
             <input type="hidden" name="csrf" value="{{$csrf}}">
+            <input type="hidden" name="filter" value="{{$f}}">
             <button type="submit" class="danger">删除</button>
           </form>
         </td>
       </tr>
+      {{end}}
     {{else}}
-      <tr><td colspan="5" class="muted">还没有楼栋。先在下方新增。</td></tr>
+      <tr><td colspan="4" class="muted">还没有楼栋。在下方新增，或用批量导入。</td></tr>
     {{end}}
     </tbody>
   </table>
@@ -78,6 +112,46 @@
       <input type="text" name="building_group_name" list="group-names" placeholder="松园" required>
     </label>
     <button type="submit">新增</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>批量导入</h2>
+  <p class="muted">
+    每行一栋。<strong>已存在的代号会被跳过，不会覆盖</strong>——所以改正错误后整份重新粘贴是安全的。
+  </p>
+  <form method="post" action="/admin/buildings/import">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label>校区（本批全部导入到这个校区）
+      <div class="select">
+        <select name="campus_code" required>
+          {{$sel2 := .Pages.selectedCampus}}
+          {{range .Pages.campuses}}
+            <option value="{{.Code}}" {{if eq .Code $sel2}}selected{{end}}>{{.Name}} ({{.Code}})</option>
+          {{end}}
+        </select>
+      </div>
+    </label>
+    <label>统一楼栋群代号（可留空，但那样每行必须自己写全 4 个字段）
+      <input type="text" name="building_group_code" list="group-codes" placeholder="sy">
+    </label>
+    <label>统一楼栋群显示名
+      <input type="text" name="building_group_name" list="group-names" placeholder="松园">
+    </label>
+    <label>楼栋列表
+      <textarea name="lines" rows="10" spellcheck="false"
+        placeholder="sy01,松园一栋&#10;sy02,松园二栋&#10;# 下面这栋属于另一个楼栋群，自己写全 4 个字段&#10;zy01,竹园一栋,zy,竹园"></textarea>
+    </label>
+    <p class="muted">
+      字段用<strong>逗号或制表符</strong>分隔（从 Excel / 表格里直接复制粘贴就是制表符）。
+      每行两种写法：
+    </p>
+    <ul class="muted">
+      <li><code>代号,显示名</code> —— 使用上面的统一楼栋群</li>
+      <li><code>代号,显示名,楼栋群代号,楼栋群显示名</code> —— 本行自己指定，优先级更高</li>
+    </ul>
+    <p class="muted">空行、以及 <code>#</code> 开头的行会被忽略；表头行会被当作错误行报出来，删掉即可。</p>
+    <button type="submit">导入</button>
   </form>
 </div>
 {{end}}

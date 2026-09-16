@@ -233,6 +233,7 @@ func (s *Server) Routes() *http.ServeMux {
 	// Building catalog (Task 5).
 	mux.Handle("GET /admin/buildings", s.requireSession(http.HandlerFunc(s.handleBuildingList)))
 	mux.Handle("POST /admin/buildings/new", s.requireSession(s.requireCSRF(http.HandlerFunc(s.handleBuildingCreate))))
+	mux.Handle("POST /admin/buildings/import", s.requireSession(s.requireCSRF(http.HandlerFunc(s.handleBuildingImport))))
 	mux.Handle("POST /admin/buildings/{code}/update", s.requireSession(s.requireCSRF(http.HandlerFunc(s.handleBuildingUpdate))))
 	mux.Handle("POST /admin/buildings/{code}/delete", s.requireSession(s.requireCSRF(http.HandlerFunc(s.handleBuildingDelete))))
 

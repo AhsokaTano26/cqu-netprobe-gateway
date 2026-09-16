@@ -168,4 +168,32 @@ a.btn.secondary:hover, .btn.secondary:hover {
 td.actions { white-space: nowrap; }
 td.actions form { display: inline; }
 td.actions button { padding: 4px 10px; font-size: 13px; margin-right: 4px; }
+/* A campus heading inside the table, so one long list reads as sections
+   instead of as an undifferentiated column of codes. */
+tr.block-head td {
+  background: #f8f9fb; color: var(--muted);
+  font-size: 12px; font-weight: 600; letter-spacing: .02em;
+  padding-top: 8px; padding-bottom: 8px;
+}
+/* Edit-on-demand: three inputs per row is ninety boxes for a campus of thirty. */
+details.inline-edit { display: inline-block; margin-right: 4px; }
+details.inline-edit summary {
+  display: inline-block; cursor: pointer; list-style: none;
+  padding: 4px 10px; border-radius: 6px; font-size: 13px;
+  background: var(--accent); color: #fff;
+}
+details.inline-edit summary::-webkit-details-marker { display: none; }
+details.inline-edit[open] summary { background: var(--panel); color: var(--ink); border: 1px solid var(--line); }
+details.inline-edit form {
+  display: block; margin-top: 8px; padding: 12px;
+  background: #f8f9fb; border: 1px solid var(--line); border-radius: 8px;
+  text-align: left; white-space: normal; min-width: 240px;
+}
+details.inline-edit label { margin-bottom: 8px; }
+details.inline-edit input { font-size: 13px; }
+ul.errors {
+  margin: 0 0 16px; padding: 12px 12px 12px 32px;
+  background: #fdeceb; border-radius: 6px; color: var(--bad); font-size: 13px;
+}
+ul.errors li { margin: 2px 0; }
 .muted { color: var(--muted); }
