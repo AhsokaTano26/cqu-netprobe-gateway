@@ -2,7 +2,8 @@
 <div class="card narrow">
   <h1>注册网络探针</h1>
   <p class="muted">
-    填写探针所在位置，提交后会生成一个 Token。为避免误报数据，新探针需要管理员启用后才会开始接收测量。
+    填写探针所在位置，提交后会生成一个 Token。Token 生成后<strong>立即可用</strong>：把它配置到探针上，
+    探针开始上报后就会出现在监控里，不需要管理员审批。
   </p>
   {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
   {{if .Pages.empty}}

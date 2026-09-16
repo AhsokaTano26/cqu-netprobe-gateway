@@ -102,7 +102,7 @@ func TestMetricsMuxServesTheDocumentedPath(t *testing.T) {
 
 	// httptest gives every request a non-loopback RemoteAddr, so this is the
 	// allowlisted-out caller the 403 above describes.
-	cfg := &config.Config{MetricsAllowedCIDRs: nil}
+	cfg := &config.Config{MetricsAllowedCIDRs: nil, MaxProbes: 500}
 	rec := httptest.NewRecorder()
 	metricsMux(cfg, prometheus.NewRegistry()).
 		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
@@ -119,6 +119,7 @@ func TestBuildPushMuxServesPushAndAdmin(t *testing.T) {
 	defer func() { _ = st.Close() }()
 
 	cfg := &config.Config{
+		MaxProbes:       500,
 		AdminUsername:   "admin",
 		AdminPassword:   "test-password-value",
 		PublicBaseURL:   "https://netprobe.example.com",
@@ -171,6 +172,7 @@ func TestAdminRenderReachesWiredLatestAndThreshold(t *testing.T) {
 	// not tell "wired through" apart from "silently fell back to the default".
 	const onlineThreshold = 7 * time.Second
 	cfg := &config.Config{
+		MaxProbes:       500,
 		AdminUsername:   "admin",
 		AdminPassword:   "test-password-value",
 		PublicBaseURL:   "https://netprobe.example.com",
@@ -258,6 +260,7 @@ func TestGeneratedPasswordIsGeneratedOnce(t *testing.T) {
 	defer func() { _ = st.Close() }()
 
 	cfg := &config.Config{
+		MaxProbes:       500,
 		AdminUsername:   "admin",
 		OnlineThreshold: 30 * time.Second,
 		RateLimit:       5 * time.Second,
@@ -296,6 +299,7 @@ func TestPushThenScrapeReflectsMeasurement(t *testing.T) {
 	defer func() { _ = st.Close() }()
 
 	cfg := &config.Config{
+		MaxProbes:     500,
 		AdminUsername: "admin", AdminPassword: "test-password-value",
 		OnlineThreshold: 30 * time.Second, RateLimit: 5 * time.Second,
 		RateLimitBurst: 3, DataDir: t.TempDir(),
@@ -346,6 +350,7 @@ func TestPublicMuxServesBothUIsAndNotMetrics(t *testing.T) {
 	defer func() { _ = st.Close() }()
 
 	cfg := &config.Config{
+		MaxProbes:     500,
 		AdminUsername: "admin", AdminPassword: "test-password-value",
 		PublicBaseURL:   "https://netprobe.example.com",
 		OnlineThreshold: 30 * time.Second, RateLimit: 5 * time.Second, RateLimitBurst: 3,
@@ -376,19 +381,20 @@ func TestPublicMuxServesBothUIsAndNotMetrics(t *testing.T) {
 	}
 }
 
-// TestSelfRegisteredProbeEmitsNothingUntilEnabled is the end-to-end proof of the
-// guardrail this whole feature rests on: a probe registered through the public
-// page holds a real token, but until an administrator enables it the gateway
-// refuses its pushes AND contributes no series to Prometheus. If that stops
-// holding, unvetted registrations reach Grafana and inflate the series count.
-func TestSelfRegisteredProbeEmitsNothingUntilEnabled(t *testing.T) {
-	st, err := store.Open(t.TempDir() + "/pending.db")
+// TestSelfRegisteredProbeWorksImmediately is the end-to-end proof of what the
+// public page promises: register, configure the token, measurements appear —
+// with no approval step, no admin action, and no second visit. It replaces a
+// test that asserted the opposite, back when self-registered probes started
+// disabled; what bounds the anonymous path now is the probe cap, not a queue.
+func TestSelfRegisteredProbeWorksImmediately(t *testing.T) {
+	st, err := store.Open(t.TempDir() + "/public.db")
 	if err != nil {
 		t.Fatalf("store.Open() error = %v", err)
 	}
 	defer func() { _ = st.Close() }()
 
 	cfg := &config.Config{
+		MaxProbes:     500,
 		AdminUsername: "admin", AdminPassword: "test-password-value",
 		PublicBaseURL:   "https://netprobe.example.com",
 		OnlineThreshold: 30 * time.Second, RateLimit: 5 * time.Second, RateLimitBurst: 3,
@@ -438,13 +444,13 @@ func TestSelfRegisteredProbeEmitsNothingUntilEnabled(t *testing.T) {
 		t.Fatalf("replaying the slot = %d, want 410", replay.Code)
 	}
 
-	// 3. The probe is disabled and attributed to the public page.
+	// 3. The probe is live at once and attributed to the public page.
 	probes, err := st.ListProbes()
 	if err != nil || len(probes) != 1 {
 		t.Fatalf("ListProbes() = %v, %v; want exactly one probe", probes, err)
 	}
-	if probes[0].Enabled {
-		t.Fatal("a self-registered probe must start disabled")
+	if !probes[0].Enabled {
+		t.Fatal("a self-registered probe must be usable without an approval step")
 	}
 	if probes[0].CreatedVia != "public" {
 		t.Errorf("CreatedVia = %q, want public", probes[0].CreatedVia)
@@ -461,29 +467,32 @@ func TestSelfRegisteredProbeEmitsNothingUntilEnabled(t *testing.T) {
 		return w
 	}
 
-	// 4. Its token is real, but the push is refused because the probe is disabled.
-	if got := push().Code; got != http.StatusForbidden {
-		t.Fatalf("push as a pending probe = %d, want 403 probe_disabled", got)
+	// 4. Its token works on the very first push, with no administrator involved.
+	if got := push().Code; got != http.StatusNoContent {
+		t.Fatalf("push as a freshly registered probe = %d, want 204", got)
 	}
 
-	// 5. And it contributes nothing to Prometheus.
+	// 5. And the measurement reaches Prometheus under the identity the database
+	//    holds, not anything the request supplied.
 	scrape := func() string {
 		w := httptest.NewRecorder()
 		metricsHandler(reg).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 		return w.Body.String()
 	}
-	if s := scrape(); strings.Contains(s, probeID) {
-		t.Fatal("a probe awaiting approval is emitting series; the disabled default is not holding")
+	s := scrape()
+	for _, want := range []string{
+		`probe_id="` + probeID + `"`,
+		`campus="hx"`,
+		`building="sy01"`,
+		`target="aliyun_dns"`,
+		"campus_probe_icmp_rtt_seconds",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("the scrape after a public registration lacks %s", want)
+		}
 	}
-
-	// 6. Enabling it makes it live end to end.
-	if err := st.SetProbeEnabled(probeID, true); err != nil {
-		t.Fatalf("SetProbeEnabled() error = %v", err)
-	}
-	if got := push().Code; got != http.StatusNoContent {
-		t.Fatalf("push after enabling = %d, want 204", got)
-	}
-	if s := scrape(); !strings.Contains(s, probeID) {
-		t.Fatal("an enabled probe is not emitting series")
+	online := regexp.MustCompile(`campus_probe_online\{[^}]*probe_id="` + probeID + `"[^}]*\} 1`)
+	if !online.MatchString(s) {
+		t.Error("a probe that just pushed is not reported online")
 	}
 }

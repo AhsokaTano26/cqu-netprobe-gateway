@@ -121,6 +121,19 @@ func (s *Store) ListProbes() ([]Probe, error) {
 	return out, nil
 }
 
+// CountProbes returns how many probes exist, for the public registration cap.
+//
+// It counts rows rather than enabled ones: a disabled probe still holds a
+// probe_id and a token, and the cap exists to bound what the anonymous page can
+// accumulate, not what is currently being measured.
+func (s *Store) CountProbes() (int, error) {
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM probes`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: count probes: %w", err)
+	}
+	return n, nil
+}
+
 // CreateProbe inserts a probe. The caller must set ProbeID and TokenHash.
 func (s *Store) CreateProbe(p *Probe) error {
 	now := nowUnix()

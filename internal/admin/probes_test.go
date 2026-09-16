@@ -547,9 +547,25 @@ func TestProbeDetailRendersProbe(t *testing.T) {
 	}
 }
 
-// seedPendingProbe inserts a probe as the public page would: disabled and
-// attributable to self-registration.
-func seedPendingProbe(t *testing.T, h *adminHarness, probeID, tokenHash string) {
+// seedPublicProbe inserts a probe as the public page now creates it: enabled
+// on arrival, and attributable to self-registration.
+func seedPublicProbe(t *testing.T, h *adminHarness, probeID, tokenHash string) {
+	t.Helper()
+	if err := h.store.CreateProbe(&store.Probe{
+		ProbeID: probeID, TokenHash: tokenHash,
+		CampusCode: "hx", CampusName: "虎溪",
+		BuildingGroupCode: "sy", BuildingGroupName: "松园",
+		BuildingCode: "sy01", BuildingName: "松园一栋",
+		NetworkType: "wired", Enabled: true, CreatedVia: "public",
+	}); err != nil {
+		t.Fatalf("CreateProbe(%s) error = %v", probeID, err)
+	}
+}
+
+// seedDisabledProbe is a probe an administrator switched off, which after the
+// public page started registering enabled probes is the only way into the
+// disabled state.
+func seedDisabledProbe(t *testing.T, h *adminHarness, probeID, tokenHash string) {
 	t.Helper()
 	if err := h.store.CreateProbe(&store.Probe{
 		ProbeID: probeID, TokenHash: tokenHash,
@@ -566,17 +582,19 @@ func TestProbeListShowsCredentialInventory(t *testing.T) {
 	h := newAdminHarness(t, "test-password-value")
 	cookie := h.login(t)
 
-	seedPendingProbe(t, h, "hx-sy01-cccccc", "hash-c")
+	seedPublicProbe(t, h, "hx-sy01-cccccc", "hash-c")
 
 	body := h.get(t, "/admin", cookie).Body.String()
 	if !strings.Contains(body, "从未轮换") {
 		t.Error("a never-rotated credential is not labelled as such")
 	}
-	if !strings.Contains(body, "待启用") {
-		t.Error("a public registration awaiting approval is not badged")
-	}
 	if !strings.Contains(body, "hx-sy01-cccccc") {
 		t.Error("the probe is not listed at all")
+	}
+	// A public registration is live on arrival, so it must not be badged as
+	// anything other than a normal probe.
+	if strings.Contains(body, "待启用") {
+		t.Error("the probe list still shows the removed awaiting-approval state")
 	}
 }
 
@@ -603,24 +621,26 @@ func TestProbeListStatusFilter(t *testing.T) {
 	h := newAdminHarness(t, "test-password-value")
 	cookie := h.login(t)
 	seedProbeForAdmin(t, h, "hx-sy01-aaaaaa", "hash-a")
-	seedPendingProbe(t, h, "hx-sy01-eeeeee", "hash-f")
-
-	pending := h.get(t, "/admin?filter=pending", cookie).Body.String()
-	if !strings.Contains(pending, "hx-sy01-eeeeee") {
-		t.Error("the pending filter dropped the probe awaiting approval")
-	}
-	if strings.Contains(pending, "hx-sy01-aaaaaa") {
-		t.Error("the pending filter included an enabled probe")
-	}
+	seedDisabledProbe(t, h, "hx-sy01-eeeeee", "hash-f")
 
 	disabled := h.get(t, "/admin?filter=disabled", cookie).Body.String()
-	if strings.Contains(disabled, "hx-sy01-eeeeee") {
-		t.Error("a probe awaiting approval was counted as deliberately disabled")
+	if !strings.Contains(disabled, "hx-sy01-eeeeee") {
+		t.Error("the disabled filter dropped a disabled probe")
+	}
+	if strings.Contains(disabled, "hx-sy01-aaaaaa") {
+		t.Error("the disabled filter included an enabled probe")
 	}
 
 	all := h.get(t, "/admin?filter=all", cookie).Body.String()
 	if !strings.Contains(all, "hx-sy01-eeeeee") || !strings.Contains(all, "hx-sy01-aaaaaa") {
 		t.Error("the all filter dropped a probe")
+	}
+
+	// "pending" is no longer a filter. An unknown value must fall back to all
+	// rather than render an empty list that reads as an empty database.
+	stale := h.get(t, "/admin?filter=pending", cookie).Body.String()
+	if !strings.Contains(stale, "hx-sy01-aaaaaa") {
+		t.Error("a filter that no longer exists did not fall back to all")
 	}
 
 	// An unknown filter value must fall back to "all" rather than showing nothing.

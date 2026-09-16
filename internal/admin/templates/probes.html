@@ -6,7 +6,6 @@
   <p class="filters">
     {{$f := .Pages.filter}}
     <a href="/admin?filter=all"      class="{{if eq $f "all"}}active{{end}}">全部 {{index .Pages.counts "all"}}</a>
-    <a href="/admin?filter=pending"  class="{{if eq $f "pending"}}active{{end}}">待启用 {{index .Pages.counts "pending"}}</a>
     <a href="/admin?filter=online"   class="{{if eq $f "online"}}active{{end}}">在线 {{index .Pages.counts "online"}}</a>
     <a href="/admin?filter=offline"  class="{{if eq $f "offline"}}active{{end}}">离线 {{index .Pages.counts "offline"}}</a>
     <a href="/admin?filter=disabled" class="{{if eq $f "disabled"}}active{{end}}">已禁用 {{index .Pages.counts "disabled"}}</a>
@@ -27,8 +26,7 @@
         <td>{{.Probe.BuildingName}} <span class="muted">({{.Probe.BuildingCode}})</span></td>
         <td>{{.Probe.NetworkType}}</td>
         <td>
-          {{if .PendingApproval}}<span class="badge pending">待启用</span>
-          {{else if not .Probe.Enabled}}<span class="badge disabled">Disabled</span>
+          {{if not .Probe.Enabled}}<span class="badge disabled">Disabled</span>
           {{else if .Online}}<span class="badge online">Online</span>
           {{else}}<span class="badge offline">Offline</span>{{end}}
         </td>
@@ -39,6 +37,11 @@
           <form method="post" action="/admin/probes/{{.Probe.ProbeID}}/toggle">
             <input type="hidden" name="csrf" value="{{$.CSRF}}">
             <button type="submit">{{if .Probe.Enabled}}禁用{{else}}启用{{end}}</button>
+          </form>
+          <form method="post" action="/admin/probes/{{.Probe.ProbeID}}/delete"
+                onsubmit="return confirm('确定删除 Probe {{.Probe.ProbeID}}？它的 Token 立即失效，测量数据会在下一次 scrape 时从 /metrics 消失。此操作不可撤销。');">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <button type="submit" class="danger">删除</button>
           </form>
         </td>
       </tr>

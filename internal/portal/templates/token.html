@@ -26,8 +26,9 @@
   </div>
 
   <p class="muted">
-    探针配置好并开始推送后，管理页面会显示为「待启用」。管理员启用之前，
-    Gateway 会返回 <code>403 probe_disabled</code>，也不会产生任何监控指标。
+    把上表三项配置到探针上，它开始上报后就会出现在监控里——不需要管理员审批。
+    探针通过 <code>GET /api/v1/targets</code> 拉取待测目标与测量参数（周期、超时等），
+    因此调整监控目标不必重新部署探针。
   </p>
   {{end}}
   <p><a class="btn secondary" href="{{.Pages.Back}}">← 返回</a></p>

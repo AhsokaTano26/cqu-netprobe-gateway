@@ -26,8 +26,14 @@ type Config struct {
 	// registration page. Much looser than RateLimit: a person registers once or
 	// twice, so this exists to stop scripts filling the probes table, not to
 	// shape normal traffic.
-	RegisterLimit       time.Duration
-	RegisterLimitBurst  int
+	RegisterLimit      time.Duration
+	RegisterLimitBurst int
+	// MaxProbes caps how many probes the public registration page will create.
+	// The register limiter bounds how fast one address can create them; this
+	// bounds how many can exist, which is what protects Prometheus cardinality
+	// over a semester. It does not apply to probes an administrator creates: a
+	// full table must not stop the person who can empty it.
+	MaxProbes           int
 	MetricsAllowedCIDRs []*net.IPNet
 	LogLevel            slog.Level
 }
@@ -85,6 +91,15 @@ func Load() (*Config, error) {
 	}
 	if cfg.RegisterLimitBurst < 1 {
 		return nil, fmt.Errorf("config: REGISTER_LIMIT_BURST must be >= 1, got %d", cfg.RegisterLimitBurst)
+	}
+
+	maxProbes := envOr("MAX_PROBES", "500")
+	cfg.MaxProbes, err = strconv.Atoi(maxProbes)
+	if err != nil {
+		return nil, fmt.Errorf("config: MAX_PROBES %q is not an integer: %w", maxProbes, err)
+	}
+	if cfg.MaxProbes < 1 {
+		return nil, fmt.Errorf("config: MAX_PROBES must be >= 1, got %d", cfg.MaxProbes)
 	}
 
 	if cfg.MetricsAllowedCIDRs, err = parseCIDRs(envOr("METRICS_ALLOWED_CIDRS", "")); err != nil {

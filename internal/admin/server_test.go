@@ -66,6 +66,7 @@ func newAdminHarness(t *testing.T, adminPassword string) *adminHarness {
 
 	now := time.Unix(1789490000, 0).UTC()
 	cfg := &config.Config{
+		MaxProbes:          500,
 		AdminUsername:      "admin",
 		AdminPassword:      adminPassword,
 		DataDir:            t.TempDir(),
@@ -262,7 +263,7 @@ func TestAdminGeneratedPasswordPersistsAcrossRestart(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "persist.db")
 	now := time.Unix(1789490000, 0).UTC()
-	cfg := &config.Config{AdminUsername: "admin", DataDir: dir}
+	cfg := &config.Config{AdminUsername: "admin", DataDir: dir, MaxProbes: 500}
 
 	st1, err := store.Open(dbPath)
 	if err != nil {

@@ -2,6 +2,7 @@ package portal
 
 import (
 	"embed"
+	"errors"
 	"io/fs"
 	"log/slog"
 	"net"
@@ -47,6 +48,18 @@ type Server struct {
 
 // NewServer builds the portal.
 func NewServer(d Deps) (*Server, error) {
+	// Refuse to start without a cap rather than treating zero as "unlimited".
+	// A zero would also mean every anonymous registration is rejected with a
+	// "limit reached" page, which is a worse way to learn about a missing
+	// setting than a failure to start. Same reasoning as the metrics allowlist:
+	// forgetting to configure it must fail closed.
+	if d.Config == nil {
+		return nil, errors.New("portal: Deps.Config is required")
+	}
+	if d.Config.MaxProbes <= 0 {
+		return nil, errors.New("portal: Deps.Config.MaxProbes must be positive")
+	}
+
 	logger := d.Logger
 	if logger == nil {
 		logger = slog.Default()

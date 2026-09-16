@@ -14,6 +14,7 @@
     <tr><th>网络类型</th><td>{{$p.Probe.NetworkType}}</td></tr>
     <tr><th>备注</th><td>{{if $p.Probe.Description}}{{$p.Probe.Description}}{{else}}<span class="muted">—</span>{{end}}</td></tr>
     <tr><th>Last Seen</th><td>{{if $p.LastSeen}}{{formatTime $p.LastSeen}}{{else}}<span class="muted">从未上报</span>{{end}}</td></tr>
+    <tr><th>创建方式</th><td>{{if eq $p.Probe.CreatedVia "public"}}公开自助注册{{else}}管理员创建{{end}}</td></tr>
     <tr><th>创建时间</th><td>{{formatTime $p.Probe.CreatedAt}}</td></tr>
     <tr><th>更新时间</th><td>{{formatTime $p.Probe.UpdatedAt}}</td></tr>
   </table>

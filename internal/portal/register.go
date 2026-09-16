@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
@@ -86,6 +87,30 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The limiter bounds how fast one address can create probes; this bounds how
+	// many can exist, which is what actually protects Prometheus cardinality
+	// over a semester. Two simultaneous registrations can both pass this check
+	// and land a probe or two over the cap — the limiter keeps that from being
+	// more than a rounding error, and the alternative is holding a transaction
+	// open across token generation.
+	//
+	// Only this path is capped. An administrator is not: a full table must not
+	// stop the person who can empty it.
+	count, err := s.store.CountProbes()
+	if err != nil {
+		s.logger.Error("failed to count probes", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if count >= s.cfg.MaxProbes {
+		s.logger.Warn("registration refused: probe cap reached",
+			"probes", count, "max_probes", s.cfg.MaxProbes, "remote_ip", clientIP(r))
+		s.renderForm(w, http.StatusServiceUnavailable, fmt.Sprintf(
+			"探针数量已达上限（%d 个），暂时无法自助注册。请联系网络中心。",
+			s.cfg.MaxProbes), campusCode)
+		return
+	}
+
 	rawToken, err := token.Generate()
 	if err != nil {
 		s.logger.Error("failed to generate token", "error", err)
@@ -102,10 +127,12 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		BuildingCode:      building.Code,
 		BuildingName:      building.Name,
 		NetworkType:       networkType,
-		// Self-registered probes start disabled: this is the guardrail that
-		// keeps unvetted registrations out of Grafana entirely, since the
-		// collector emits nothing for a disabled probe.
-		Enabled:     false,
+		// Enabled at once: a self-registered probe starts reporting as soon as
+		// its token is configured, with no approval step. What bounds the
+		// anonymous path is the probe cap checked above, not a queue nobody
+		// works through — a probe parked in "pending" measures nothing and
+		// looks identical to a broken one.
+		Enabled:     true,
 		Description: description,
 		CreatedVia:  "public",
 	}

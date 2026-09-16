@@ -53,10 +53,6 @@ type probeRow struct {
 	Probe    store.Probe
 	Online   bool
 	LastSeen time.Time
-	// PendingApproval is true for a probe created through the public page that
-	// an administrator has not enabled yet. Without CreatedVia this would be
-	// indistinguishable from a probe deliberately disabled for maintenance.
-	PendingApproval bool
 }
 
 // onlineState mirrors the metrics collector's rule so the UI and /metrics never
@@ -74,7 +70,7 @@ func (s *Server) onlineState(p store.Probe, now time.Time) (bool, time.Time) {
 
 // probeFilters are the accepted values of the ?filter= query parameter.
 var probeFilters = map[string]bool{
-	"all": true, "online": true, "offline": true, "disabled": true, "pending": true,
+	"all": true, "online": true, "offline": true, "disabled": true,
 }
 
 func (s *Server) handleProbeList(w http.ResponseWriter, r *http.Request) {
@@ -95,10 +91,7 @@ func (s *Server) handleProbeList(w http.ResponseWriter, r *http.Request) {
 	rows := make([]probeRow, 0, len(probes))
 	for _, p := range probes {
 		online, lastSeen := s.onlineState(p, now)
-		row := probeRow{
-			Probe: p, Online: online, LastSeen: lastSeen,
-			PendingApproval: p.CreatedVia == "public" && !p.Enabled,
-		}
+		row := probeRow{Probe: p, Online: online, LastSeen: lastSeen}
 		if !matchesProbeFilter(filter, row) {
 			continue
 		}
@@ -114,10 +107,8 @@ func (s *Server) handleProbeList(w http.ResponseWriter, r *http.Request) {
 
 func matchesProbeFilter(filter string, row probeRow) bool {
 	switch filter {
-	case "pending":
-		return row.PendingApproval
 	case "disabled":
-		return !row.Probe.Enabled && !row.PendingApproval
+		return !row.Probe.Enabled
 	case "online":
 		return row.Probe.Enabled && row.Online
 	case "offline":
@@ -133,8 +124,8 @@ func countProbeFilters(probes []store.Probe, s *Server, now time.Time) map[strin
 	counts := map[string]int{"all": len(probes)}
 	for _, p := range probes {
 		online, _ := s.onlineState(p, now)
-		row := probeRow{Probe: p, Online: online, PendingApproval: p.CreatedVia == "public" && !p.Enabled}
-		for _, f := range []string{"pending", "disabled", "online", "offline"} {
+		row := probeRow{Probe: p, Online: online}
+		for _, f := range []string{"disabled", "online", "offline"} {
 			if matchesProbeFilter(f, row) {
 				counts[f]++
 			}

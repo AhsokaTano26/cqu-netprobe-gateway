@@ -29,6 +29,7 @@ func newHarness(t *testing.T) *harness {
 	t.Cleanup(func() { _ = st.Close() })
 
 	cfg := &config.Config{
+		MaxProbes:          500,
 		PublicBaseURL:      "https://netprobe.example.com",
 		RegisterLimit:      time.Hour,
 		RegisterLimitBurst: 3,
@@ -102,7 +103,10 @@ func TestRegisterFormFiltersBuildingsByCampus(t *testing.T) {
 	}
 }
 
-func TestRegisterCreatesDisabledProbeAndShowsTokenOnce(t *testing.T) {
+// TestRegisterCreatesEnabledProbeAndShowsTokenOnce covers the anonymous path
+// end to end: the probe is usable the moment the token is shown, and the token
+// itself is still shown exactly once.
+func TestRegisterCreatesEnabledProbeAndShowsTokenOnce(t *testing.T) {
 	h := newHarness(t)
 	rec := h.do(t, http.MethodPost, "/", url.Values{
 		"campus_code":   {"hx"},
@@ -129,11 +133,11 @@ func TestRegisterCreatesDisabledProbeAndShowsTokenOnce(t *testing.T) {
 	if !strings.Contains(first.Body.String(), "https://netprobe.example.com/api/v1/push") {
 		t.Error("the push endpoint is not shown")
 	}
-	if !strings.Contains(first.Body.String(), "待") {
-		t.Error("the page does not tell the visitor the probe awaits approval")
+	if !strings.Contains(first.Body.String(), "不需要管理员审批") {
+		t.Error("the page does not tell the visitor the token works straight away")
 	}
 
-	// The probe exists, is disabled, and is attributed to the public page.
+	// The probe exists, is enabled, and is attributed to the public page.
 	probes, err := h.store.ListProbes()
 	if err != nil {
 		t.Fatalf("ListProbes() error = %v", err)
@@ -141,8 +145,8 @@ func TestRegisterCreatesDisabledProbeAndShowsTokenOnce(t *testing.T) {
 	if len(probes) != 1 {
 		t.Fatalf("probes = %d, want 1", len(probes))
 	}
-	if probes[0].Enabled {
-		t.Error("a self-registered probe must start disabled")
+	if !probes[0].Enabled {
+		t.Error("a self-registered probe must be enabled without an approval step")
 	}
 	if probes[0].CreatedVia != "public" {
 		t.Errorf("CreatedVia = %q, want public", probes[0].CreatedVia)
@@ -301,6 +305,54 @@ func TestRegisterRateLimited(t *testing.T) {
 	}
 }
 
+// The cap is what bounds the anonymous path now that registration is
+// immediate. It must refuse at the boundary, not one probe later, and it must
+// say so in a way the visitor can act on.
+func TestRegisterRefusedWhenProbeCapReached(t *testing.T) {
+	h := newHarness(t)
+	h.server.cfg.MaxProbes = 1
+
+	form := url.Values{
+		"campus_code": {"hx"}, "building_code": {"sy01"}, "network_type": {"wired"},
+	}
+	if rec := h.do(t, http.MethodPost, "/", form, "10.1.9.1:5555"); rec.Code != http.StatusSeeOther {
+		t.Fatalf("first registration status = %d, want 303", rec.Code)
+	}
+
+	rec := h.do(t, http.MethodPost, "/", form, "10.1.9.2:5555")
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("registration past the cap = %d, want 503", rec.Code)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "上限") {
+		t.Error("the refusal does not tell the visitor a limit was reached")
+	}
+	probes, err := h.store.ListProbes()
+	if err != nil {
+		t.Fatalf("ListProbes() error = %v", err)
+	}
+	if len(probes) != 1 {
+		t.Fatalf("probes = %d, want 1: the cap did not hold", len(probes))
+	}
+}
+
+// A cap of zero would reject every registration with a "limit reached" page,
+// which is a far worse way to discover a missing setting than a refusal to
+// start. Same reasoning as the metrics allowlist: fail closed, and fail early.
+func TestPortalRefusesToStartWithoutAProbeCap(t *testing.T) {
+	st, err := store.Open(filepath.Join(t.TempDir(), "nocap.db"))
+	if err != nil {
+		t.Fatalf("store.Open() error = %v", err)
+	}
+	defer func() { _ = st.Close() }()
+
+	if _, err := NewServer(Deps{Store: st, Config: &config.Config{}}); err == nil {
+		t.Fatal("NewServer() accepted a config with no probe cap")
+	}
+	if _, err := NewServer(Deps{Store: st}); err == nil {
+		t.Fatal("NewServer() accepted a nil config")
+	}
+}
+
 func TestRegisterRejectsForeignOrigin(t *testing.T) {
 	h := newHarness(t)
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(url.Values{
@@ -326,7 +378,7 @@ func TestRegisterServes503WhenCatalogIsEmpty(t *testing.T) {
 	if _, err := st.ListCampuses(); err != nil {
 		t.Fatalf("ListCampuses() error = %v", err)
 	}
-	cfg := &config.Config{RegisterLimit: time.Hour, RegisterLimitBurst: 3}
+	cfg := &config.Config{RegisterLimit: time.Hour, RegisterLimitBurst: 3, MaxProbes: 500}
 	srv, err := NewServer(Deps{Store: st, Config: cfg,
 		Limiter: NewRegisterLimiter(cfg.RegisterLimit, cfg.RegisterLimitBurst)})
 	if err != nil {
