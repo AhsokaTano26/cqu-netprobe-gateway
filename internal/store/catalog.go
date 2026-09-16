@@ -121,23 +121,51 @@ func (s *Store) UpdateCampusName(code, name string) error {
 	return requireAffected(res, code)
 }
 
-// DeleteCampus removes a campus, refusing while probes still reference it.
+// DeleteCampus removes a campus together with its buildings, refusing while any
+// probe still depends on either.
+//
+// The count deliberately spans BOTH references: a probe carries campus_code and
+// building_code independently, so a probe can name a campus it does not belong
+// to while pointing at one of its buildings. Counting only campus_code would
+// miss that probe, and because the buildings are deleted before the campus, the
+// building foreign key's ON DELETE RESTRICT would never fire — silently leaving
+// the probe pointing at a catalog entry that no longer exists. The whole
+// sequence runs in one transaction so a failure cannot leave a campus whose
+// buildings are already gone.
 func (s *Store) DeleteCampus(code string) error {
-	n, err := s.CampusProbeCount(code)
+	tx, err := s.db.Begin()
 	if err != nil {
-		return err
+		return fmt.Errorf("store: begin delete campus: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var n int
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM probes
+		WHERE campus_code = ? OR building_code IN (SELECT code FROM buildings WHERE campus_code = ?)`,
+		code, code).Scan(&n); err != nil {
+		return fmt.Errorf("store: count probes for campus: %w", err)
 	}
 	if n > 0 {
 		return ErrInUse
 	}
-	if _, err := s.db.Exec(`DELETE FROM buildings WHERE campus_code = ?`, code); err != nil {
+	if _, err := tx.Exec(`DELETE FROM buildings WHERE campus_code = ?`, code); err != nil {
 		return fmt.Errorf("store: delete campus buildings: %w", err)
 	}
-	res, err := s.db.Exec(`DELETE FROM campuses WHERE code = ?`, code)
+	res, err := tx.Exec(`DELETE FROM campuses WHERE code = ?`, code)
 	if err != nil {
 		return fmt.Errorf("store: delete campus: %w", err)
 	}
-	return requireAffected(res, code)
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("store: rows affected: %w", err)
+	}
+	if affected == 0 {
+		return ErrNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit delete campus: %w", err)
+	}
+	return nil
 }
 
 // ListBuildings returns every building ordered by campus then code.

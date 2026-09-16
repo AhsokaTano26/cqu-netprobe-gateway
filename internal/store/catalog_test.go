@@ -239,6 +239,68 @@ func TestCatalogDeleteBlockedWhileReferenced(t *testing.T) {
 	}
 }
 
+func TestDeleteCampusRefusesWhenAProbeReferencesItsBuilding(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.CreateCampus(&Campus{Code: "hx", Name: "虎溪"}); err != nil {
+		t.Fatalf("CreateCampus(hx) error = %v", err)
+	}
+	if err := s.CreateCampus(&Campus{Code: "aq", Name: "A区"}); err != nil {
+		t.Fatalf("CreateCampus(aq) error = %v", err)
+	}
+	if err := s.CreateBuilding(&Building{Code: "sy01", CampusCode: "hx",
+		BuildingGroupCode: "sy", BuildingGroupName: "松园", Name: "松园一栋"}); err != nil {
+		t.Fatalf("CreateBuilding() error = %v", err)
+	}
+
+	// The mismatched pair: the probe claims campus aq but sits in hx's building.
+	p := sampleProbe("aq-sy01-aaaaaa", "hash-a")
+	p.CampusCode, p.CampusName = "aq", "A区"
+	if err := s.CreateProbe(p); err != nil {
+		t.Fatalf("CreateProbe() error = %v", err)
+	}
+
+	// Deleting hx must refuse: the probe's building lives there, even though the
+	// probe's own campus_code points elsewhere.
+	if err := s.DeleteCampus("hx"); !errors.Is(err, ErrInUse) {
+		t.Fatalf("DeleteCampus(hx) = %v, want ErrInUse", err)
+	}
+	// The building must still exist — that is the damage the guard prevents.
+	if _, err := s.GetBuilding("sy01"); err != nil {
+		t.Fatalf("GetBuilding(sy01) after the refused delete = %v; the building was destroyed", err)
+	}
+
+	// aq is genuinely unreferenced by campus_code and by building, so it goes.
+	if err := s.DeleteCampus("aq"); !errors.Is(err, ErrInUse) {
+		t.Fatalf("DeleteCampus(aq) = %v, want ErrInUse (the probe's campus_code is aq)", err)
+	}
+}
+
+func TestDeleteCampusSucceedsWhenNothingReferencesIt(t *testing.T) {
+	s := newTestStore(t)
+	if err := s.CreateCampus(&Campus{Code: "aq", Name: "A区"}); err != nil {
+		t.Fatalf("CreateCampus() error = %v", err)
+	}
+	if err := s.CreateBuilding(&Building{Code: "aq01", CampusCode: "aq",
+		BuildingGroupCode: "aq", BuildingGroupName: "A区", Name: "A区一栋"}); err != nil {
+		t.Fatalf("CreateBuilding() error = %v", err)
+	}
+
+	if err := s.DeleteCampus("aq"); err != nil {
+		t.Fatalf("DeleteCampus() error = %v, want nil", err)
+	}
+	// The campus and its buildings are both gone.
+	if _, err := s.GetCampus("aq"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("GetCampus(after delete) = %v, want ErrNotFound", err)
+	}
+	if _, err := s.GetBuilding("aq01"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("the campus's building survived the campus delete: %v", err)
+	}
+	if err := s.DeleteCampus("aq"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("second DeleteCampus() = %v, want ErrNotFound", err)
+	}
+}
+
 func TestBuildingGroupsAreDistinctAndSorted(t *testing.T) {
 	s := newTestStore(t)
 	for _, b := range []Building{
