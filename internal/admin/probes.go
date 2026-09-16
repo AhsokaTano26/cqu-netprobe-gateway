@@ -12,6 +12,7 @@ import (
 
 	"github.com/tano/cqu-netprobe-gateway/internal/store"
 	"github.com/tano/cqu-netprobe-gateway/internal/token"
+	"github.com/tano/cqu-netprobe-gateway/internal/webui"
 )
 
 // codePattern constrains every code that reaches a Prometheus label or a probe
@@ -79,7 +80,7 @@ func (s *Server) handleProbeList(w http.ResponseWriter, r *http.Request) {
 		rows = append(rows, probeRow{Probe: p, Online: online, LastSeen: lastSeen})
 	}
 
-	s.render(w, http.StatusOK, "probes.html", pageData{
+	webui.Render(w, http.StatusOK, s.templates, "probes.html", webui.PageData{
 		Title:    "Probes",
 		Username: sess.username,
 		CSRF:     sess.csrf,
@@ -89,7 +90,7 @@ func (s *Server) handleProbeList(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleProbeNewForm(w http.ResponseWriter, r *http.Request) {
 	sess, _ := s.sessionFromRequest(r)
-	s.render(w, http.StatusOK, "probe_new.html", pageData{
+	webui.Render(w, http.StatusOK, s.templates, "probe_new.html", webui.PageData{
 		Title:    "新建 Probe",
 		Username: sess.username,
 		CSRF:     sess.csrf,
@@ -171,7 +172,7 @@ func (s *Server) handleProbeCreate(w http.ResponseWriter, r *http.Request) {
 	form := readProbeForm(r)
 
 	if msg := form.validate(); msg != "" {
-		s.render(w, http.StatusBadRequest, "probe_new.html", pageData{
+		webui.Render(w, http.StatusBadRequest, s.templates, "probe_new.html", webui.PageData{
 			Title: "新建 Probe", Username: sess.username, CSRF: sess.csrf, Error: msg,
 			Pages: map[string]any{"form": form.view()},
 		})
@@ -245,7 +246,7 @@ func (s *Server) handleTokenShow(w http.ResponseWriter, r *http.Request) {
 	// take deletes the slot, so a refresh or a back-button finds nothing.
 	probeID, rawToken, ok := s.oneShot.takePair(slot)
 	if !ok {
-		s.render(w, http.StatusGone, "token.html", pageData{
+		webui.Render(w, http.StatusGone, s.templates, "token.html", webui.PageData{
 			Title: "Token 已失效", Username: sess.username, CSRF: sess.csrf,
 			Error: "该 Token 已显示过或已过期，无法再次查看。如需新凭据请轮换 Token。",
 			Pages: map[string]any{"Token": "", "ProbeID": "", "PushEndpoint": ""},
@@ -253,7 +254,7 @@ func (s *Server) handleTokenShow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.render(w, http.StatusOK, "token.html", pageData{
+	webui.Render(w, http.StatusOK, s.templates, "token.html", webui.PageData{
 		Title: "Probe Token", Username: sess.username, CSRF: sess.csrf,
 		Pages: map[string]any{
 			"Token":        rawToken,
@@ -279,7 +280,7 @@ func (s *Server) handleProbeDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	online, lastSeen := s.onlineState(*probe, s.now())
-	s.render(w, http.StatusOK, "probe_detail.html", pageData{
+	webui.Render(w, http.StatusOK, s.templates, "probe_detail.html", webui.PageData{
 		Title: id, Username: sess.username, CSRF: sess.csrf,
 		Pages: map[string]any{"probe": probeRow{Probe: *probe, Online: online, LastSeen: lastSeen}},
 	})

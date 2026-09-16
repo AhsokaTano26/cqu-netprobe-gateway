@@ -335,17 +335,6 @@ func TestAdminCSRFRequired(t *testing.T) {
 	}
 }
 
-func TestAdminStaticCSSServed(t *testing.T) {
-	h := newAdminHarness(t, "test-password-value")
-	rec := h.get(t, "/admin/static/admin.css", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("css status = %d, want 200", rec.Code)
-	}
-	if !strings.Contains(rec.Body.String(), "body") {
-		t.Error("css body does not look like a stylesheet")
-	}
-}
-
 func TestAdminLoginPageRenders(t *testing.T) {
 	h := newAdminHarness(t, "test-password-value")
 	rec := h.get(t, "/admin/login", nil)

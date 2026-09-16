@@ -8,6 +8,7 @@ import (
 
 	"github.com/tano/cqu-netprobe-gateway/internal/protocol"
 	"github.com/tano/cqu-netprobe-gateway/internal/store"
+	"github.com/tano/cqu-netprobe-gateway/internal/webui"
 )
 
 // targetIDPattern is tighter than codePattern: a target ID is a long-lived
@@ -34,7 +35,7 @@ func (s *Server) handleTargetList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	s.render(w, http.StatusOK, "targets.html", pageData{
+	webui.Render(w, http.StatusOK, s.templates, "targets.html", webui.PageData{
 		Title: "Targets", Username: sess.username, CSRF: sess.csrf,
 		Pages: map[string]any{"targets": targets},
 	})
@@ -154,7 +155,7 @@ func (s *Server) renderTargetsWithError(w http.ResponseWriter, sess *session, ms
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	s.render(w, status, "targets.html", pageData{
+	webui.Render(w, status, s.templates, "targets.html", webui.PageData{
 		Title: "Targets", Username: sess.username, CSRF: sess.csrf, Error: msg,
 		Pages: map[string]any{"targets": targets},
 	})

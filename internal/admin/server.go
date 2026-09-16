@@ -1,6 +1,8 @@
 package admin
 
 import (
+	"embed"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"time"
@@ -8,7 +10,26 @@ import (
 	"github.com/tano/cqu-netprobe-gateway/internal/config"
 	"github.com/tano/cqu-netprobe-gateway/internal/latest"
 	"github.com/tano/cqu-netprobe-gateway/internal/store"
+	"github.com/tano/cqu-netprobe-gateway/internal/webui"
 )
+
+// adminPages are the templates this package owns. The shared layout lives in
+// internal/webui; the portal declares its own list separately.
+var adminPages = []string{
+	"login.html",
+	"probes.html",
+	"probe_new.html",
+	"probe_detail.html",
+	"token.html",
+	"targets.html",
+}
+
+// pageFS holds this package's page files. An embed pattern keeps the directory
+// name in every path, so it is rooted at templates/ below: a page is named by
+// its file name alone, which is the key Render looks it up by.
+//
+//go:embed templates/*.html
+var pageFS embed.FS
 
 // sessionCookieName is the cookie holding the admin session ID.
 const sessionCookieName = "netprobe_admin_session"
@@ -47,7 +68,7 @@ type Server struct {
 	now             func() time.Time
 	sessions        *sessionStore
 	oneShot         *oneShotStore
-	templates       pageTemplates
+	templates       webui.Templates
 	latest          *latest.Store
 	limiter         Limiter
 	onlineThreshold time.Duration
@@ -85,7 +106,11 @@ func NewServer(d Deps) (*Server, error) {
 		onlineThreshold = defaultOnlineThreshold
 	}
 
-	tmpl, err := parseTemplates()
+	pages, err := fs.Sub(pageFS, "templates")
+	if err != nil {
+		return nil, err
+	}
+	tmpl, err := webui.Parse(pages, adminPages...)
 	if err != nil {
 		return nil, err
 	}
@@ -148,15 +173,15 @@ func (s *Server) PasswordGeneration() (string, bool) {
 	return s.generatedPassword, s.generatedPassword != ""
 }
 
-// Routes returns the admin mux: session/static, the eight probe routes and the
-// four target routes.
+// Routes returns the admin mux: the session routes, the eight probe routes and
+// the four target routes. The shared stylesheet is not served here; main
+// registers webui.StaticHandler once on the public listener.
 func (s *Server) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
 
 	mux.Handle("GET /admin/login", http.HandlerFunc(s.handleLoginPage))
 	mux.Handle("POST /admin/login", http.HandlerFunc(s.handleLogin))
 	mux.Handle("POST /admin/logout", s.requireSession(http.HandlerFunc(s.handleLogout)))
-	mux.Handle("GET /admin/static/", staticHandler())
 
 	// Probe management (added by Task 17).
 	mux.Handle("GET /admin", s.requireSession(http.HandlerFunc(s.handleProbeList)))

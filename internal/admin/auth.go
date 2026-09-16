@@ -3,6 +3,8 @@ package admin
 import (
 	"net"
 	"net/http"
+
+	"github.com/tano/cqu-netprobe-gateway/internal/webui"
 )
 
 // sessionFromRequest returns the live session for a request, if any.
@@ -83,7 +85,7 @@ func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/admin", http.StatusSeeOther)
 		return
 	}
-	s.render(w, http.StatusOK, "login.html", pageData{Title: "登录"})
+	webui.Render(w, http.StatusOK, s.templates, "login.html", webui.PageData{Title: "登录"})
 }
 
 // handleLogin verifies credentials and starts a session.
@@ -101,7 +103,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if username != s.username || passwordErr != nil {
 		// The submitted password is never logged or echoed.
 		s.logger.Warn("admin login failed", "username", username, "remote_ip", clientIP(r))
-		s.render(w, http.StatusUnauthorized, "login.html", pageData{
+		webui.Render(w, http.StatusUnauthorized, s.templates, "login.html", webui.PageData{
 			Title: "登录",
 			Error: "用户名或密码错误",
 		})
