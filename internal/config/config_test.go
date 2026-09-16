@@ -115,6 +115,54 @@ func TestLoadRejectsBadValues(t *testing.T) {
 	}
 }
 
+// Trusting everything is always a mistake and a dangerous one: it makes
+// X-Forwarded-For authoritative for every caller, so anyone who can reach the
+// port directly chooses their own source address and every limit keyed on it
+// stops meaning anything. Refusing to start is the only safe answer.
+func TestLoadRejectsACatchAllTrustedProxy(t *testing.T) {
+	clearEnv(t)
+
+	for _, cidr := range []string{"0.0.0.0/0", "::/0"} {
+		t.Run(cidr, func(t *testing.T) {
+			t.Setenv("TRUSTED_PROXY_CIDRS", cidr)
+			_, err := Load()
+			if err == nil {
+				t.Fatalf("Load() with TRUSTED_PROXY_CIDRS=%s: want an error, got nil", cidr)
+			}
+			if !strings.Contains(err.Error(), "TRUSTED_PROXY_CIDRS") {
+				t.Errorf("error %q does not name the offending key", err)
+			}
+		})
+	}
+}
+
+func TestLoadTrustedProxyCIDRs(t *testing.T) {
+	clearEnv(t)
+
+	// Unset is the safe default: the header is ignored entirely.
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(cfg.TrustedProxyCIDRs) != 0 {
+		t.Errorf("TrustedProxyCIDRs = %v with nothing configured, want none", cfg.TrustedProxyCIDRs)
+	}
+
+	t.Setenv("TRUSTED_PROXY_CIDRS", "127.0.0.1/32, 10.0.0.0/8")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(cfg.TrustedProxyCIDRs) != 2 {
+		t.Errorf("TrustedProxyCIDRs = %v, want two networks", cfg.TrustedProxyCIDRs)
+	}
+
+	t.Setenv("TRUSTED_PROXY_CIDRS", "10.0.0.0/99")
+	if _, err := Load(); err == nil {
+		t.Error("a malformed CIDR was accepted")
+	}
+}
+
 func TestLoadRegistrationLimitDefaults(t *testing.T) {
 	clearEnv(t)
 	for _, k := range []string{"REGISTER_LIMIT", "REGISTER_LIMIT_BURST"} {

@@ -176,7 +176,7 @@ cqu_netprobe_gateway_http_requests_total{method="POST",path="/api/v1/push",statu
 
 func TestCIDRAllowlistEmptyPermitsLoopbackOnly(t *testing.T) {
 	called := false
-	h := CIDRAllowlist(nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := CIDRAllowlist(nil, nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -212,7 +212,7 @@ func TestCIDRAllowlistWithNetworks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := CIDRAllowlist([]*net.IPNet{n}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := CIDRAllowlist([]*net.IPNet{n}, nil, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -234,17 +234,5 @@ func TestCIDRAllowlistWithNetworks(t *testing.T) {
 				t.Fatalf("status = %d, want %d", rec.Code, tc.want)
 			}
 		})
-	}
-}
-
-func TestClientIPStripsPort(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPost, "/", nil)
-	req.RemoteAddr = "10.1.2.3:4567"
-	if got := ClientIP(req); got != "10.1.2.3" {
-		t.Errorf("ClientIP() = %q, want 10.1.2.3", got)
-	}
-	req.RemoteAddr = "[2001:db8::1]:4567"
-	if got := ClientIP(req); got != "2001:db8::1" {
-		t.Errorf("ClientIP() = %q, want 2001:db8::1", got)
 	}
 }

@@ -1,9 +1,9 @@
 package admin
 
 import (
-	"net"
 	"net/http"
 
+	"github.com/tano/cqu-netprobe-gateway/internal/clientip"
 	"github.com/tano/cqu-netprobe-gateway/internal/webui"
 )
 
@@ -102,7 +102,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	passwordErr := verifyPassword(s.passwordHash, password)
 	if username != s.username || passwordErr != nil {
 		// The submitted password is never logged or echoed.
-		s.logger.Warn("admin login failed", "username", username, "remote_ip", clientIP(r))
+		s.logger.Warn("admin login failed", "username", username, "remote_ip", clientip.From(r, s.cfg.TrustedProxyCIDRs))
 		webui.Render(w, http.StatusUnauthorized, s.templates, "login.html", webui.PageData{
 			Title: "登录",
 			Error: "用户名或密码错误",
@@ -117,7 +117,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.setSessionCookie(w, sess.id)
-	s.logger.Info("admin login succeeded", "username", username, "remote_ip", clientIP(r))
+	s.logger.Info("admin login succeeded", "username", username, "remote_ip", clientip.From(r, s.cfg.TrustedProxyCIDRs))
 	http.Redirect(w, r, "/admin", http.StatusSeeOther)
 }
 
@@ -128,12 +128,4 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 	s.clearSessionCookie(w)
 	http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
-}
-
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }

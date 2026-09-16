@@ -1,6 +1,8 @@
 package portal
 
 import (
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -351,6 +353,58 @@ func TestPortalRefusesToStartWithoutAProbeCap(t *testing.T) {
 	if _, err := NewServer(Deps{Store: st}); err == nil {
 		t.Fatal("NewServer() accepted a nil config")
 	}
+}
+
+// The anonymous path has the same failure mode as the push throttle: behind a
+// proxy every visitor shares one address, so the allowance becomes global and
+// self-registration stops working for everyone after the first few people.
+// Declaring the proxy trusted that the header may be believed is the fix.
+func TestRegisterLimiterSeparatesClientsBehindATrustedProxy(t *testing.T) {
+	register := func(t *testing.T, h *harness, clientIP string) int {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(url.Values{
+			"campus_code": {"hx"}, "building_code": {"sy01"}, "network_type": {"wired"},
+		}.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.RemoteAddr = "127.0.0.1:5000" // the proxy
+		req.Header.Set("X-Forwarded-For", clientIP)
+		rec := httptest.NewRecorder()
+		h.server.Routes().ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	t.Run("without a trusted proxy the allowance is global", func(t *testing.T) {
+		h := newHarness(t)
+		for i := 0; i < 3; i++ {
+			if got := register(t, h, fmt.Sprintf("203.0.113.%d", i)); got != http.StatusSeeOther {
+				t.Fatalf("registration %d = %d, want 303", i, got)
+			}
+		}
+		if got := register(t, h, "198.51.100.4"); got != http.StatusTooManyRequests {
+			t.Errorf("a fourth visitor = %d, want 429 (one allowance for the proxy)", got)
+		}
+	})
+
+	t.Run("with a trusted proxy each visitor has their own", func(t *testing.T) {
+		h := newHarness(t)
+		_, proxy, err := net.ParseCIDR("127.0.0.0/8")
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.server.cfg.TrustedProxyCIDRs = []*net.IPNet{proxy}
+
+		for i := 0; i < 3; i++ {
+			if got := register(t, h, "203.0.113.9"); got != http.StatusSeeOther {
+				t.Fatalf("registration %d = %d, want 303", i, got)
+			}
+		}
+		if got := register(t, h, "203.0.113.9"); got != http.StatusTooManyRequests {
+			t.Errorf("the fourth registration by one visitor = %d, want 429", got)
+		}
+		if got := register(t, h, "198.51.100.4"); got != http.StatusSeeOther {
+			t.Errorf("another visitor = %d, want 303: one person's registrations must not lock out the rest", got)
+		}
+	})
 }
 
 func TestRegisterRejectsForeignOrigin(t *testing.T) {

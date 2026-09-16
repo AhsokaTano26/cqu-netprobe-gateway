@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io/fs"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/url"
 	"time"
@@ -119,17 +118,6 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.Handle("POST /{$}", http.HandlerFunc(s.handleRegister))
 	mux.Handle("GET /token/{slot}", http.HandlerFunc(s.handleTokenShow))
 	return mux
-}
-
-// clientIP strips the port from the peer address. Forwarded headers are
-// deliberately ignored: they are caller-controlled, and no trusted proxy sits in
-// front of this gateway by design.
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }
 
 // originAllowed reports whether a state-changing request came from our own

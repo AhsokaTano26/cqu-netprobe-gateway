@@ -35,7 +35,11 @@ type Config struct {
 	// full table must not stop the person who can empty it.
 	MaxProbes           int
 	MetricsAllowedCIDRs []*net.IPNet
-	LogLevel            slog.Level
+	// TrustedProxyCIDRs are the networks whose X-Forwarded-For is believed.
+	// Empty — the default — means the header is ignored and the peer address is
+	// used, which is correct for a deployment with no proxy in front.
+	TrustedProxyCIDRs []*net.IPNet
+	LogLevel          slog.Level
 }
 
 // DBPath returns the SQLite database path inside DataDir.
@@ -104,6 +108,21 @@ func Load() (*Config, error) {
 
 	if cfg.MetricsAllowedCIDRs, err = parseCIDRs(envOr("METRICS_ALLOWED_CIDRS", "")); err != nil {
 		return nil, err
+	}
+	if cfg.TrustedProxyCIDRs, err = parseCIDRs(envOr("TRUSTED_PROXY_CIDRS", "")); err != nil {
+		return nil, err
+	}
+	for _, n := range cfg.TrustedProxyCIDRs {
+		// A catch-all here is always a mistake and a dangerous one: it makes
+		// X-Forwarded-For authoritative for every caller, so anyone who can
+		// reach the port directly picks their own source address — and every
+		// limit keyed on it (token guessing, registration, the metrics
+		// allowlist) stops meaning anything. Refusing to start says so; a
+		// silently spoofable gateway does not.
+		if ones, bits := n.Mask.Size(); ones == 0 && bits != 0 {
+			return nil, fmt.Errorf(
+				"config: TRUSTED_PROXY_CIDRS must not contain %s: it would trust X-Forwarded-For from anyone, letting callers choose their own source address. List the proxy's actual addresses.", n)
+		}
 	}
 	if cfg.LogLevel, err = parseLevel(envOr("LOG_LEVEL", "info")); err != nil {
 		return nil, err

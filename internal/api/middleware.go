@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/tano/cqu-netprobe-gateway/internal/clientip"
 	"github.com/tano/cqu-netprobe-gateway/internal/metrics"
 )
 
@@ -105,9 +106,12 @@ func RouteMetrics(self *metrics.Self, next http.Handler) http.Handler {
 //
 // An empty allowlist means "loopback only" rather than "everyone": forgetting
 // to configure it must fail closed. See the design doc §12.2.
-func CIDRAllowlist(nets []*net.IPNet, next http.Handler) http.Handler {
+//
+// trustedProxies is passed through to clientip.From, so a gateway behind a
+// reverse proxy allowlists the scraper's real address rather than the proxy's.
+func CIDRAllowlist(nets, trustedProxies []*net.IPNet, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := net.ParseIP(ClientIP(r))
+		ip := net.ParseIP(clientip.From(r, trustedProxies))
 		if ip == nil {
 			writeError(w, http.StatusForbidden, "invalid_request", msgBadRequest)
 			return
@@ -124,15 +128,4 @@ func CIDRAllowlist(nets []*net.IPNet, next http.Handler) http.Handler {
 		}
 		writeError(w, http.StatusForbidden, "invalid_request", msgBadRequest)
 	})
-}
-
-// ClientIP extracts the peer address without its port. Forwarded headers are
-// deliberately ignored: they are client-controlled and this gateway never sits
-// behind a trusted proxy by design.
-func ClientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
 }

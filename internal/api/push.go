@@ -4,10 +4,12 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/tano/cqu-netprobe-gateway/internal/clientip"
 	"github.com/tano/cqu-netprobe-gateway/internal/latest"
 	"github.com/tano/cqu-netprobe-gateway/internal/metrics"
 	"github.com/tano/cqu-netprobe-gateway/internal/protocol"
@@ -27,16 +29,21 @@ type Deps struct {
 	Limiter *Limiter
 	Logger  *slog.Logger
 	Now     func() time.Time
+	// TrustedProxies are the networks whose X-Forwarded-For is believed when
+	// attributing a request for the token-guessing throttle. Empty means the
+	// header is ignored, which is the correct setting with no proxy in front.
+	TrustedProxies []*net.IPNet
 }
 
 // Server handles the Protocol v1 push endpoint.
 type Server struct {
-	store   *store.Store
-	latest  *latest.Store
-	self    *metrics.Self
-	limiter *Limiter
-	logger  *slog.Logger
-	now     func() time.Time
+	store          *store.Store
+	latest         *latest.Store
+	self           *metrics.Self
+	limiter        *Limiter
+	logger         *slog.Logger
+	now            func() time.Time
+	trustedProxies []*net.IPNet
 }
 
 // NewServer builds a push server.
@@ -50,12 +57,13 @@ func NewServer(d Deps) *Server {
 		now = time.Now
 	}
 	return &Server{
-		store:   d.Store,
-		latest:  d.Latest,
-		self:    d.Self,
-		limiter: d.Limiter,
-		logger:  logger,
-		now:     now,
+		store:          d.Store,
+		latest:         d.Latest,
+		self:           d.Self,
+		limiter:        d.Limiter,
+		logger:         logger,
+		now:            now,
+		trustedProxies: d.TrustedProxies,
 	}
 }
 
@@ -204,7 +212,7 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (*store.Pr
 	// probe its credential is bad — the exact harm the 503-instead-of-401 split
 	// below exists to avoid, and it would make an operator rotate a healthy
 	// token. 429 says what is actually true: back off and retry next cycle.
-	if s.limiter != nil && s.limiter.AuthFailureBlocked(ClientIP(r)) {
+	if s.limiter != nil && s.limiter.AuthFailureBlocked(clientip.From(r, s.trustedProxies)) {
 		s.reject(protocol.CodeRateLimited, "")
 		writeError(w, http.StatusTooManyRequests, protocol.CodeRateLimited, msgRateLimited)
 		return nil, false
@@ -228,7 +236,7 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (*store.Pr
 		// report the same status for the same condition. The ordinary case (a
 		// bad token, budget still available) is a genuine credential failure and
 		// stays 401.
-		if s.limiter != nil && !s.limiter.AllowAuthFailure(ClientIP(r)) {
+		if s.limiter != nil && !s.limiter.AllowAuthFailure(clientip.From(r, s.trustedProxies)) {
 			// The credential was evaluated and is bad, so this counts as an auth
 			// failure; the *response* is a throttle, so it counts as a rejected
 			// push too. Two counters for two different questions.

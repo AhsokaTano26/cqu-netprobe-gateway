@@ -855,6 +855,77 @@ func TestTargetsDispatchTheStoredMeasurementConfig(t *testing.T) {
 	}
 }
 
+// Behind a reverse proxy every request arrives from the proxy, so an
+// address-keyed limit collapses into a single global bucket: one attacker's
+// guessing exhausts it and the whole fleet is throttled. Declaring the proxy
+// trusted is what restores one bucket per client — and the first half of this
+// test is the failure being prevented.
+func TestAuthFailureThrottleSeparatesClientsBehindATrustedProxy(t *testing.T) {
+	exhaust := func(t *testing.T, h *harness, clientIP string) int {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/push", strings.NewReader(goodBody))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer cqu_probe_wrong")
+		req.RemoteAddr = "127.0.0.1:5000" // the proxy
+		req.Header.Set("X-Forwarded-For", clientIP)
+
+		code := 0
+		for i := 0; i < authFailureBurst+5; i++ {
+			rec := httptest.NewRecorder()
+			h.server.Routes().ServeHTTP(rec, req)
+			code = rec.Code
+			if code == http.StatusTooManyRequests {
+				break
+			}
+		}
+		return code
+	}
+	// A well-formed push from the same proxy but a different client.
+	push := func(t *testing.T, h *harness, clientIP string) int {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/push", strings.NewReader(goodBody))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", h.bearer())
+		req.RemoteAddr = "127.0.0.1:5000"
+		req.Header.Set("X-Forwarded-For", clientIP)
+		rec := httptest.NewRecorder()
+		h.server.Routes().ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	t.Run("without a trusted proxy the header is ignored", func(t *testing.T) {
+		h := newHarness(t)
+		if got := exhaust(t, h, "203.0.113.9"); got != http.StatusTooManyRequests {
+			t.Fatalf("guessing was never throttled: last status %d", got)
+		}
+		// A different claimed client is the same peer address, so it inherits
+		// the exhausted budget. This is the deployment the header cannot fix.
+		if got := push(t, h, "198.51.100.4"); got != http.StatusTooManyRequests {
+			t.Errorf("second client = %d, want 429 (one bucket for the proxy)", got)
+		}
+	})
+
+	t.Run("with a trusted proxy each client keeps its own budget", func(t *testing.T) {
+		h := newHarness(t)
+		_, proxy, err := net.ParseCIDR("127.0.0.0/8")
+		if err != nil {
+			t.Fatal(err)
+		}
+		h.server.trustedProxies = []*net.IPNet{proxy}
+
+		if got := exhaust(t, h, "203.0.113.9"); got != http.StatusTooManyRequests {
+			t.Fatalf("guessing was never throttled: last status %d", got)
+		}
+		if got := push(t, h, "203.0.113.9"); got != http.StatusTooManyRequests {
+			t.Errorf("the guessing client = %d, want 429", got)
+		}
+		if got := push(t, h, "198.51.100.4"); got != http.StatusNoContent {
+			t.Errorf("an innocent client behind the same proxy = %d, want 204: "+
+				"one client's guessing must not throttle the rest", got)
+		}
+	})
+}
+
 func TestTargetsSharesTheAuthFailureThrottle(t *testing.T) {
 	h := newHarness(t)
 	guessed, err := token.Generate()

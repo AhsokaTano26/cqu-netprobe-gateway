@@ -54,10 +54,11 @@ func buildHandler(cfg *config.Config, st *store.Store, reg prometheus.Registerer
 	limiter := api.NewLimiter(cfg.RateLimit, cfg.RateLimitBurst)
 
 	push := api.NewServer(api.Deps{
-		Store:   st,
-		Latest:  latestStore,
-		Self:    self,
-		Limiter: limiter,
+		Store:          st,
+		Latest:         latestStore,
+		Self:           self,
+		Limiter:        limiter,
+		TrustedProxies: cfg.TrustedProxyCIDRs,
 	})
 
 	// The portal owns the one-shot slot store, so it is built first: the admin's
@@ -113,7 +114,7 @@ func metricsHandler(reg *prometheus.Registry) http.Handler {
 // serves is testable without opening a socket.
 func metricsMux(cfg *config.Config, reg *prometheus.Registry) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.Handle("GET /metrics", api.CIDRAllowlist(cfg.MetricsAllowedCIDRs, metricsHandler(reg)))
+	mux.Handle("GET /metrics", api.CIDRAllowlist(cfg.MetricsAllowedCIDRs, cfg.TrustedProxyCIDRs, metricsHandler(reg)))
 	return mux
 }
 

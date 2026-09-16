@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/tano/cqu-netprobe-gateway/internal/clientip"
 	"github.com/tano/cqu-netprobe-gateway/internal/store"
 	"github.com/tano/cqu-netprobe-gateway/internal/token"
 	"github.com/tano/cqu-netprobe-gateway/internal/webui"
@@ -81,7 +82,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	// succeed. A rejected one costs a regex and one indexed lookup, and spending
 	// an allowance on it would lock a visitor out for the whole interval over a
 	// typo — the form deliberately re-renders for a corrected retry.
-	if s.limiter != nil && !s.limiter.Allow(clientIP(r)) {
+	if s.limiter != nil && !s.limiter.Allow(clientip.From(r, s.cfg.TrustedProxyCIDRs)) {
 		s.renderForm(w, http.StatusTooManyRequests,
 			"注册过于频繁，请稍后再试。", campusCode)
 		return
@@ -104,7 +105,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	if count >= s.cfg.MaxProbes {
 		s.logger.Warn("registration refused: probe cap reached",
-			"probes", count, "max_probes", s.cfg.MaxProbes, "remote_ip", clientIP(r))
+			"probes", count, "max_probes", s.cfg.MaxProbes, "remote_ip", clientip.From(r, s.cfg.TrustedProxyCIDRs))
 		s.renderForm(w, http.StatusServiceUnavailable, fmt.Sprintf(
 			"探针数量已达上限（%d 个），暂时无法自助注册。请联系网络中心。",
 			s.cfg.MaxProbes), campusCode)
@@ -172,7 +173,7 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 	}
 	// The token itself is never logged; probe_id and location are public.
 	s.logger.Info("probe self-registered", "probe_id", probe.ProbeID,
-		"campus", probe.CampusCode, "building", probe.BuildingCode, "remote_ip", clientIP(r))
+		"campus", probe.CampusCode, "building", probe.BuildingCode, "remote_ip", clientip.From(r, s.cfg.TrustedProxyCIDRs))
 
 	http.Redirect(w, r, "/token/"+slot, http.StatusSeeOther)
 }
