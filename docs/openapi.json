@@ -1,0 +1,496 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "CQU NetProbe Gateway API",
+    "version": "1.0.0",
+    "summary": "探针测量上报与配置下发接口",
+    "description": "本文件描述 `cqu-netprobe-gateway` 的探针侧 HTTP 接口，对应 `CQU NetProbe Protocol v1.md` 的 §32 与 §14–§21。协议文档是权威定义，本文件是它的机器可读表达；两者冲突时以协议文档为准。\n\n接口只有三个：探针上报测量结果（`POST /api/v1/push`）、探针拉取待测目标与测量参数（`GET /api/v1/targets`）、Prometheus 抓取（`GET /metrics`）。管理员页面与自助注册页面是 HTML 表单界面，不属于本文件描述的 API。\n\n**认证**：探针接口使用 `Authorization: Bearer <TOKEN>`，Token 由 Gateway 生成并在展示页一次性显示。`/metrics` 不使用 Token，改用来源 IP 白名单。\n\n**时间单位**：探针侧 JSON 一律使用毫秒，字段名带 `_ms` 后缀（§24）；仅 Prometheus 指标使用秒。",
+    "license": { "name": "MIT", "identifier": "MIT" }
+  },
+  "servers": [
+    {
+      "url": "https://netprobe.example.com",
+      "description": "生产环境。必须使用 HTTPS（§2、§30）。"
+    }
+  ],
+  "tags": [
+    {
+      "name": "probe",
+      "description": "探针调用。认证方式为 Bearer Token，身份由 Gateway 通过 Token 查库得到，探针不发送任何身份字段（§22）。"
+    },
+    {
+      "name": "ops",
+      "description": "运维端点，供 Prometheus 抓取。"
+    }
+  ],
+  "security": [{ "bearerAuth": [] }],
+  "paths": {
+    "/api/v1/push": {
+      "post": {
+        "tags": ["probe"],
+        "summary": "上报一轮测量结果",
+        "operationId": "pushMeasurements",
+        "description": "探针完成一轮测量后主动上报。成功返回 204，无响应体。\n\n`last_seen` 只在整条校验链全部通过后刷新（§23）：Token 合法、Probe 已启用、JSON 合法、协议版本合法、全部 measurement 校验通过。收到请求本身不算在线。\n\n探针侧超时建议：连接 3s、整体 5s（§19）。上报失败不需要补传历史数据，下一周期继续即可（§18）。",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PushRequest" },
+              "example": {
+                "version": 1,
+                "timestamp": 1789490000,
+                "probe_version": "0.1.0",
+                "results": {
+                  "aliyun_dns": {
+                    "icmp": {
+                      "success": true,
+                      "sent": 5,
+                      "received": 5,
+                      "loss_ratio": 0.0,
+                      "min_rtt_ms": 10.2,
+                      "avg_rtt_ms": 12.3,
+                      "max_rtt_ms": 15.8,
+                      "jitter_ms": 1.4
+                    }
+                  },
+                  "campus_dns": { "dns": { "success": true, "duration_ms": 8.4 } },
+                  "cqu_mirror": {
+                    "http": { "success": true, "status_code": 200, "duration_ms": 51.2 }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": { "description": "Push 成功，无响应体（§14）。" },
+          "400": {
+            "description": "JSON 或测量数据不合法。`error.code` 取值：`invalid_json`（不是合法 JSON、或含尾随数据）、`invalid_payload`（字段缺失、类型不符、数值越界、measurement 内部不一致）、`unsupported_version`（`version` 不是 1）、`invalid_target`（Target 不在 Allowlist 中，§29）、`invalid_probe_type`（该 Target 不允许此测量类型，或类型未知，§13、§29）。",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "405": { "$ref": "#/components/responses/MethodNotAllowed" },
+          "413": {
+            "description": "请求体超过 64 KiB（65536 字节，§20）。探针的探测量远小于该值，出现即说明 Payload 结构有问题。",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          },
+          "415": {
+            "description": "`Content-Type` 不是 `application/json`（允许带 `charset=utf-8` 参数，§4）。",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "500": { "$ref": "#/components/responses/InternalError" },
+          "503": { "$ref": "#/components/responses/ServiceUnavailable" }
+        }
+      }
+    },
+    "/api/v1/targets": {
+      "get": {
+        "tags": ["probe"],
+        "summary": "拉取待测目标列表与测量参数",
+        "operationId": "listTargets",
+        "description": "探针据此得知该测哪些目标、以及用什么参数测，从而不必把 Target 列表和测量参数编译进自己的代码（§32）。\n\n这是**增量**接口：不调用它的探针行为完全不变，因此协议版本仍为 `1`。\n\n列表内容规则（§32.5）：已禁用（`enabled = 0`）、`address` 为空或全为空白、没有任何允许的测量类型的 Target **不会出现**在响应中。探针必须能处理 `targets` 为空数组的情况。\n\n列表按 `target_id` 升序，同一份数据两次调用返回的字节完全一致，探针可以直接 diff 来决定是否重建测量计划。\n\n认证方式与 push 完全相同，并且与 push 共用同一份认证失败限流额度——本端点不会成为绕过限流的 Token 猜测入口。",
+        "responses": {
+          "200": {
+            "description": "当前可测量的 Target 列表，以及所有 Target 共用的测量参数。响应中不含显示名与备注：它们只用于管理页面，探针不应依赖。",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TargetList" },
+                "example": {
+                  "version": 1,
+                  "config": {
+                    "interval_ms": 10000,
+                    "icmp": { "count": 5, "interval_ms": 200, "timeout_ms": 1000 },
+                    "http": {
+                      "method": "GET",
+                      "follow_redirects": true,
+                      "verify_tls": true,
+                      "timeout_ms": 5000
+                    },
+                    "dns": { "transport": "udp", "timeout_ms": 3000 }
+                  },
+                  "targets": [
+                    {
+                      "target_id": "aliyun_dns",
+                      "address": "223.5.5.5",
+                      "probe_types": ["icmp"]
+                    },
+                    {
+                      "target_id": "cqu_mirror",
+                      "address": "https://mirrors.cqu.edu.cn/",
+                      "probe_types": ["http"]
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "405": { "$ref": "#/components/responses/MethodNotAllowed" },
+          "429": { "$ref": "#/components/responses/RateLimited" },
+          "503": { "$ref": "#/components/responses/ServiceUnavailable" }
+        }
+      }
+    },
+    "/metrics": {
+      "get": {
+        "tags": ["ops"],
+        "summary": "Prometheus 抓取端点",
+        "operationId": "scrapeMetrics",
+        "security": [],
+        "servers": [
+          {
+            "url": "http://127.0.0.1:9090",
+            "description": "独立监听器（`METRICS_ADDR`）。默认只绑定回环地址，不对宿主机发布，除非显式修改部署配置。"
+          }
+        ],
+        "description": "Prometheus 文本格式的指标输出。**不使用 Token 认证**，改用来源 IP 白名单：回环地址始终允许，其余地址必须落在 `METRICS_ALLOWED_CIDRS` 内。白名单为空表示「仅回环」，而不是「所有人」——漏配必须失败关闭。\n\n在线判定与陈旧数据规则见 §26、§27：探针超过 30 秒没有成功 push 即 `campus_probe_online 0`，并且不再暴露其 RTT／丢包／时延等测量指标，只保留 `online` 与 `last_seen_timestamp_seconds`，以免 Grafana 把旧数据当成当前状态。",
+        "responses": {
+          "200": {
+            "description": "指标文本。",
+            "content": {
+              "text/plain": { "schema": { "type": "string" } }
+            }
+          },
+          "403": {
+            "description": "来源 IP 不在白名单内。",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "cqu_probe_<43 个 base64url 字符>",
+        "description": "Probe Token，至少 256 bit 随机熵，由 Gateway 生成，只在生成时显示一次。数据库只保存它的 SHA-256 哈希，明文不可找回，遗失只能轮换。Token 不得写入日志、不得上传到其他服务器、不得作为 JSON 字段发送、不得作为 Prometheus Label（§3、§30）。"
+      }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "Token 缺失、格式错误或无效。认证失败本身不刷新 `last_seen`；同一来源地址反复失败会消耗按 IP 的失败额度（§21、§30）。",
+        "content": {
+          "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+        }
+      },
+      "Forbidden": {
+        "description": "Token 有效，但该 Probe 已被管理员禁用（`probe_disabled`）。禁用是管理员的刻意决定，与「掉线」不是一回事：被禁用的 Probe 在 `/metrics` 上不产生任何 Series。",
+        "content": {
+          "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+        }
+      },
+      "MethodNotAllowed": {
+        "description": "HTTP 方法不允许（`invalid_request`）。探针接口固定使用 POST（上报）与 GET（拉取列表）。",
+        "content": {
+          "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+        }
+      },
+      "RateLimited": {
+        "description": "触发限流（`rate_limited`）。正常测量周期为 10 秒，Gateway 允许 1 请求/5 秒、突发 3，因此正常探针不会被限流（§21）。探针收到后不进行特殊高速重试，等待下一正常周期即可。",
+        "content": {
+          "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+        }
+      },
+      "InternalError": {
+        "description": "Gateway 内部错误（`internal_error`）。",
+        "content": {
+          "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+        }
+      },
+      "ServiceUnavailable": {
+        "description": "Gateway 暂时不可用（`service_unavailable`），例如数据库不可读。探针按普通失败处理，下一周期重试。",
+        "content": {
+          "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+        }
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": ["code", "message"],
+            "properties": {
+              "code": { "$ref": "#/components/schemas/ErrorCode" },
+              "message": {
+                "type": "string",
+                "description": "固定的人类可读说明。程序逻辑不得依赖它，只能依赖 HTTP 状态码，必要时再依赖 `error.code`（§17）。"
+              }
+            }
+          }
+        },
+        "description": "统一错误结构（§15）。错误信息中不包含 Token、Token 哈希、SQL、堆栈或服务器内部路径。"
+      },
+      "ErrorCode": {
+        "type": "string",
+        "enum": [
+          "invalid_request",
+          "invalid_json",
+          "invalid_payload",
+          "unsupported_version",
+          "invalid_target",
+          "invalid_probe_type",
+          "unauthorized",
+          "probe_disabled",
+          "rate_limited",
+          "internal_error",
+          "service_unavailable"
+        ],
+        "description": "Protocol v1 §17 定义的错误代码集合。"
+      },
+      "PushRequest": {
+        "type": "object",
+        "required": ["version", "results"],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "const": 1,
+            "description": "协议版本，v1 固定为 1。其他值返回 400 `unsupported_version`。"
+          },
+          "timestamp": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "探针完成本轮测量时的本地 Unix 时间（秒）。**仅作测量辅助信息**：Gateway 判断在线状态一律使用服务器自己的接收时间，不使用本字段（§6）。负数被拒绝。"
+          },
+          "probe_version": {
+            "type": "string",
+            "maxLength": 32,
+            "description": "探针版本号，建议语义化版本。上限为 **32 字节**（JSON Schema 的 `maxLength` 按字符计数，Gateway 按字节计数，非 ASCII 版本号以 Gateway 的规则为准）。不得用作 Prometheus Label（§6）。"
+          },
+          "results": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": { "$ref": "#/components/schemas/TargetMeasurements" },
+            "description": "Key 为 Target ID，必须是 Gateway Allowlist 中的目标（§6、§12）。允许的 Target 会随 `GET /api/v1/targets` 下发。至少需要一个 measurement，否则返回 `400 invalid_payload`。"
+          }
+        },
+        "description": "Protocol v1 请求体（§5）。未知的**顶层**字段被忽略，以便未来增加可选 metadata 而不破坏兼容性；未知的 **Target** 或 **Probe Type** 则必须拒绝整个请求（§29）。",
+        "example": {
+          "version": 1,
+          "timestamp": 1789490000,
+          "probe_version": "0.1.0",
+          "results": {
+            "aliyun_dns": {
+              "icmp": {
+                "success": true,
+                "sent": 5,
+                "received": 5,
+                "loss_ratio": 0.0,
+                "min_rtt_ms": 10.2,
+                "avg_rtt_ms": 12.3,
+                "max_rtt_ms": 15.8,
+                "jitter_ms": 1.4
+              }
+            }
+          }
+        }
+      },
+      "TargetMeasurements": {
+        "type": "object",
+        "minProperties": 1,
+        "additionalProperties": false,
+        "properties": {
+          "icmp": { "$ref": "#/components/schemas/ICMPResult" },
+          "dns": { "$ref": "#/components/schemas/DNSResult" },
+          "http": { "$ref": "#/components/schemas/HTTPResult" }
+        },
+        "description": "一个 Target 本轮的全部测量结果。协议允许同一 Target 同时包含多种测量类型（§13），但每种类型都必须在该 Target 的 Target × ProbeType Allowlist 之内，否则整个请求被拒绝。"
+      },
+      "ICMPResult": {
+        "type": "object",
+        "required": ["success", "sent", "received", "loss_ratio"],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "本轮至少收到一个合法 ICMP Reply 即为 true，等价于 `received > 0`（§7）。"
+          },
+          "sent": { "type": "integer", "minimum": 1, "description": "本轮发出的 Echo Request 数，必须大于 0。" },
+          "received": { "type": "integer", "minimum": 0, "description": "收到的合法 Reply 数，必须满足 `0 <= received <= sent`。" },
+          "loss_ratio": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "必须等于 `(sent - received) / sent`，允许 1e-3 的序列化舍入误差。`1.0` 表示全部丢包，此时 `received` 必须为 0。"
+          },
+          "min_rtt_ms": { "$ref": "#/components/schemas/NullableDuration" },
+          "avg_rtt_ms": { "$ref": "#/components/schemas/NullableDuration" },
+          "max_rtt_ms": { "$ref": "#/components/schemas/NullableDuration" },
+          "jitter_ms": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "description": "相邻成功 RTT 差值绝对值的平均（§9）。收到少于 2 个 Reply 时为 `null`。`received = 0` 时必须为 `null`；否则可选。"
+          }
+        },
+        "description": "ICMP 测量结果（§7–§9）。RTT 与 jitter 单位为毫秒。**全部丢包时严禁填 0**：`0 ms` 与「没有测量结果」语义不同，无有效 RTT 时四个字段一律 `null`，Gateway 不为 `null` 暴露对应指标（§8）。收到至少一个 Reply 时，`min_rtt_ms`、`avg_rtt_ms`、`max_rtt_ms` 三者必填且满足 `min <= avg <= max`。"
+      },
+      "DNSResult": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": { "type": "boolean", "description": "查询是否成功。" },
+          "duration_ms": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "description": "查询耗时（毫秒）。成功时必填且非 null；失败时必须为 `null`。v1 不上传具体错误字符串，错误原因只记录在探针本地日志（§10）。"
+          }
+        },
+        "description": "DNS 测量结果（§10）。`success` 为 true 时 `duration_ms` 必填，为 false 时必须为 `null`——两者同时出现或不一致都会被拒绝。"
+      },
+      "HTTPResult": {
+        "type": "object",
+        "required": ["success"],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "description": "v1 固定定义：`200 <= status_code < 400` 为 true（§11）。"
+          },
+          "status_code": {
+            "type": ["integer", "null"],
+            "minimum": 100,
+            "maximum": 599,
+            "description": "最终响应的状态码。TCP/TLS/HTTP 层根本没拿到响应时为 `null`。"
+          },
+          "duration_ms": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "description": "请求耗时（毫秒）。与服务码同时非 null 或同时为 null。"
+          }
+        },
+        "description": "HTTP 测量结果（§11）。三种合法组合：拿到响应且成功（`success: true`、状态码与耗时均非 null）；拿到响应但状态码表示失败（`success: false`、状态码与耗时均非 null）；完全没有响应（`success: false`、两者均为 `null`）。`status_code` 与 `duration_ms` 必须同时有值或同时为 `null`。"
+      },
+      "NullableDuration": {
+        "type": ["number", "null"],
+        "minimum": 0,
+        "description": "毫秒为单位的耗时，无有效测量时为 `null`。"
+      },
+      "TargetList": {
+        "type": "object",
+        "required": ["version", "config", "targets"],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "const": 1,
+            "description": "本响应结构的版本，当前固定为 1。同版本内只允许**新增可选字段**：不得删除、改名、改类型或改单位，探针必须忽略不认识的字段。"
+          },
+          "config": { "$ref": "#/components/schemas/MeasurementConfig" },
+          "targets": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Target" },
+            "description": "可测量的 Target 列表，按 `target_id` 升序。可能为空数组（管理员尚未配置任何可测目标），探针必须能处理。"
+          }
+        },
+        "description": "`GET /api/v1/targets` 的响应体（§32.3）。"
+      },
+      "Target": {
+        "type": "object",
+        "required": ["target_id", "address", "probe_types"],
+        "properties": {
+          "target_id": {
+            "type": "string",
+            "pattern": "^[a-z0-9_]{1,32}$",
+            "description": "上报时 `results` 的 Key，同时成为 Prometheus 的 `target` Label。**不得重命名**：改名会使历史时序断裂（§12）。"
+          },
+          "address": {
+            "type": "string",
+            "minLength": 1,
+            "description": "探针实际拨测的目标。含义由 `probe_types` 决定：`icmp` 为要 ping 的 IP 或域名；`dns` 为要查询的 DNS 服务器地址；`http` 为完整 URL。\n\n这是**运行数据**，不是备注：地址为空或全为空白的 Target 不会下发给探针。"
+          },
+          "probe_types": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/ProbeType" },
+            "minItems": 1,
+            "description": "该 Target 允许的测量类型，升序。不在其中的类型会被网关以 `400 invalid_probe_type` 拒绝（§13）。"
+          }
+        },
+        "description": "一个可测量的目标。响应中不含显示名与备注：它们只用于管理页面。"
+      },
+      "ProbeType": {
+        "type": "string",
+        "enum": ["icmp", "dns", "http"],
+        "description": "v1 定义的三种测量类型（§7、§10、§11）。"
+      },
+      "MeasurementConfig": {
+        "type": "object",
+        "required": ["interval_ms", "icmp", "http", "dns"],
+        "properties": {
+          "interval_ms": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "测量周期：相邻两轮测量的起始间隔。也是上报周期，必须与 per-token 限流兼容（§18、§21）。"
+          },
+          "icmp": { "$ref": "#/components/schemas/ICMPConfig" },
+          "http": { "$ref": "#/components/schemas/HTTPConfig" },
+          "dns": { "$ref": "#/components/schemas/DNSConfig" }
+        },
+        "description": "所有 Target 共用的测量参数（§32.4）。Gateway 不对单个 Target 定义不同的超时或周期。\n\n三个测量类型的分组**始终全部存在**：只测 ICMP 的探针忽略另外两组即可，不需要处理字段缺失。\n\n本结构内所有时间一律为毫秒，与 §24 的单位规则一致——字段名带 `_ms` 后缀，因此不存在「秒还是毫秒」的歧义。"
+      },
+      "ICMPConfig": {
+        "type": "object",
+        "required": ["count", "interval_ms", "timeout_ms"],
+        "properties": {
+          "count": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "每轮发出的 Echo Request 数，即上报时 `icmp.sent` 的值（§7 要求 `sent > 0`）。"
+          },
+          "interval_ms": { "type": "integer", "minimum": 1, "description": "两次 Echo Request 之间的间隔。" },
+          "timeout_ms": { "type": "integer", "minimum": 1, "description": "单个 Echo Request 等待回复的超时，超时即计为丢包。" }
+        },
+        "description": "ICMP 测量参数。整个 ICMP 轮次的最坏耗时为 `(count - 1) * interval_ms + timeout_ms`，必须小于 `interval_ms`（顶层测量周期），否则探针会在上一轮结束前开始下一轮。"
+      },
+      "HTTPConfig": {
+        "type": "object",
+        "required": ["method", "follow_redirects", "verify_tls", "timeout_ms"],
+        "properties": {
+          "method": {
+            "type": "string",
+            "enum": ["GET"],
+            "description": "请求方法。v1 固定为 GET。"
+          },
+          "follow_redirects": {
+            "type": "boolean",
+            "description": "是否跟随 3xx 重定向。§11 的成功判定（`200 <= status_code < 400`）作用于重定向链结束后的那次响应。"
+          },
+          "verify_tls": {
+            "type": "boolean",
+            "description": "是否校验证书。这是测量语义的一部分：跳过校验的探针测到的东西与校验证书的不同，两者的结果不可直接比较。"
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "整个请求的整体超时，含重定向。**注意与 §19 区分**：§19 的 5 秒是探针向 Gateway 上报时的 HTTP 客户端超时，本字段是探针测量 HTTP Target 时的超时，两者是不同的连接。"
+          }
+        },
+        "description": "HTTP 测量参数（§11）。"
+      },
+      "DNSConfig": {
+        "type": "object",
+        "required": ["transport", "timeout_ms"],
+        "properties": {
+          "transport": {
+            "type": "string",
+            "enum": ["udp"],
+            "description": "查询使用的传输层。v1 固定为 udp。"
+          },
+          "timeout_ms": { "type": "integer", "minimum": 1, "description": "查询的整体超时。" }
+        },
+        "description": "DNS 测量参数（§10）。"
+      }
+    }
+  }
+}

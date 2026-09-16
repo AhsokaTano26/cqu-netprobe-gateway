@@ -40,8 +40,9 @@ Probe 不直接与 Prometheus 通信。
 POST /api/v1/push
 ```
 
-本协议另外定义了 `GET /api/v1/targets`，供探针获取可测量的 Target 列表。它是
-**增量**的：不调用它的探针行为完全不变，因此不构成协议版本变更。详见 §32。
+本协议另外定义了 `GET /api/v1/targets`，供探针获取可测量的 Target 列表与测量参数
+（探测周期、ICMP/HTTP/DNS 的各项超时）。它同样是**增量**的：不调用它的探针行为完全不变，
+因此不构成协议版本变更。详见 §32。
 
 生产环境必须使用 HTTPS。
 
@@ -1265,6 +1266,17 @@ Content-Type: application/json
 ```json
 {
   "version": 1,
+  "config": {
+    "interval_ms": 10000,
+    "icmp": { "count": 5, "interval_ms": 200, "timeout_ms": 1000 },
+    "http": {
+      "method": "GET",
+      "follow_redirects": true,
+      "verify_tls": true,
+      "timeout_ms": 5000
+    },
+    "dns": { "transport": "udp", "timeout_ms": 3000 }
+  },
   "targets": [
     {
       "target_id": "aliyun_dns",
@@ -1284,6 +1296,7 @@ Content-Type: application/json
 
 ```text
 version        integer   本响应结构的版本，当前固定 1
+config         object    测量参数，所有 Target 共用，见 §32.4
 targets        array     可测量的 Target 列表，按 target_id 升序
 
 target_id      string    上报时 results 的 Key（§6）
@@ -1301,7 +1314,61 @@ http   完整 URL
 
 响应中**不包含**显示名与备注：它们只用于管理页面，不参与测量，探针不应依赖。
 
-## 32.4 列表内容规则
+## 32.4 测量参数（`config`）
+
+`config` 让探针的测量方式也由 Gateway 定义，而不是编译进每个探针。本节之前，探测周期与
+各项超时写在探针代码里；调整一次就要重新部署全部探针，且不同版本的探针可能用着不同的参数，
+结果却混在同一个 Dashboard 上。
+
+```text
+interval_ms             integer   测量周期：相邻两轮测量的起始间隔
+icmp.count              integer   每轮 Echo Request 数（即上报的 sent，§7 要求 > 0）
+icmp.interval_ms        integer   两次 Echo Request 的间隔
+icmp.timeout_ms         integer   单次 Echo Request 的超时，超时即计为丢包
+http.method             string    请求方法，v1 固定 GET
+http.follow_redirects   boolean   是否跟随 3xx 重定向
+http.verify_tls         boolean   是否校验证书
+http.timeout_ms         integer   整个请求的整体超时，含重定向
+dns.transport           string    查询使用的传输层，v1 固定 udp
+dns.timeout_ms          integer   查询的整体超时
+```
+
+v1 固定值：
+
+```text
+interval_ms       10000
+
+icmp.count        5
+icmp.interval_ms  200
+icmp.timeout_ms   1000
+
+http.method          GET
+http.follow_redirects  true
+http.verify_tls        true
+http.timeout_ms        5000
+
+dns.transport     udp
+dns.timeout_ms    3000
+```
+
+约定：
+
+- **本结构内所有时间一律毫秒**，与 §24 的单位规则一致。字段名带 `_ms` 后缀，因此不存在
+  「秒还是毫秒」的歧义。
+- 三个测量类型的分组**始终全部存在**。只测 ICMP 的探针忽略 `http` 与 `dns` 两组即可，
+  不需要处理字段缺失。
+- 整个 ICMP 轮次的最坏耗时为 `(icmp.count - 1) * icmp.interval_ms + icmp.timeout_ms`。
+  它必须小于 `interval_ms`，否则探针会在上一轮结束前开始下一轮，两轮的丢包会被算成一轮。
+  当前值：`4 * 200 + 1000 = 1800 ms`，小于 `10000 ms`。
+- `http.timeout_ms` 与 §19 的 5 秒**不是同一件事**：§19 约束的是探针向 Gateway 上报时的
+  HTTP 客户端超时，本字段约束的是探针测量 HTTP Target 时的超时，两者是不同的连接。
+- 数值不由探针决定。探针如果实现了本地覆盖（例如调试用），上报的数据会与同组其他探针
+  不可比，应避免。
+
+参数**不区分 Target**：Gateway 不为单个 Target 定义不同的超时或周期。需要区别对待时，
+应当在探针的测量类型上区分，而不是在协议里增加每 Target 参数。
+
+## 32.5 列表内容规则
 
 Gateway **不下发**以下 Target：
 
@@ -1314,7 +1381,7 @@ probe_types 为空          没有任何允许的测量类型
 因此 `address` 是**运行数据**，不再是文档字段：地址未填写的 Target 不会出现在列表中。
 探针实现必须能处理列表为空的情况（此时不上报任何 measurement）。
 
-## 32.5 错误
+## 32.6 错误
 
 沿用 §15 的统一错误结构，状态码沿用 §16：
 
@@ -1322,13 +1389,15 @@ probe_types 为空          没有任何允许的测量类型
 401  Token 缺失、格式错误或无效
 403  Probe 已被禁用
 405  Method 不允许
-500  Gateway 内部错误
+429  认证失败次数过多，来源地址被暂时限流
 503  Gateway 暂时不可用
 ```
 
 认证失败的限流与 §21 的按 IP 保护共用同一份额度：该端点不会成为绕过限流的 Token 猜测入口。
+因此 429 既可能来自 Token 猜测被拦下，也可能来自同一出口地址（例如校园 NAT）下其他主机的
+行为——探针的处理方式相同：等待下一正常周期。
 
-## 32.6 探针侧行为
+## 32.7 探针侧行为
 
 ```text
 启动时拉取一次
@@ -1336,7 +1405,31 @@ probe_types 为空          没有任何允许的测量类型
 刷新失败不得阻塞测量循环：沿用上一份已知列表继续工作
 ```
 
-列表顺序稳定，探针可以直接对两次响应做 diff 来决定是否重建测量计划。
+列表顺序稳定，探针可以直接对两次响应做 diff 来决定是否重建测量计划。`config` 也在 diff
+范围内：管理员调整 `config` 后（需要重新部署 Gateway），探针刷新下一次即可生效，不必重新
+部署探针。
 
 探针在任何时候都只应测量列表内、且类型被允许的 Target。列表之外的结果会被
 Gateway 以 `400 invalid_target` / `400 invalid_probe_type` 拒绝（§29）。
+
+## 32.8 同版本内的演进规则
+
+`version` 描述的是本响应**结构**的版本，当前为 `1`。在同一版本内只允许：
+
+```text
+新增可选的字段或对象成员
+```
+
+不允许：
+
+```text
+删除字段
+重命名字段
+改变字段类型
+改变字段单位或语义
+```
+
+探针**必须忽略不认识的字段**，不得因为出现新字段而拒绝整份响应。`config` 就是这样加进来的：
+一个只认 `version` 与 `targets` 的旧探针读到本章的响应，行为与本章加入前完全一致。
+
+只有违反上述规则时才升级 `version`。

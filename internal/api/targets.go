@@ -12,13 +12,18 @@ import (
 // endpoint entirely, and this can evolve without touching the push contract.
 const targetsVersion = 1
 
-// targetsResponse is the body of GET /api/v1/targets.
+// targetsResponse is the body of GET /api/v1/targets (Protocol v1 §32.3).
 //
 // Only what a probe needs to act is included. Display names and descriptions are
 // page-only and stay out, so a probe cannot come to depend on them.
 type targetsResponse struct {
-	Version int           `json:"version"`
-	Targets []targetEntry `json:"targets"`
+	Version int `json:"version"`
+	// Config tells the probe how to measure, so the schedule and the per-type
+	// parameters have one definition instead of one per probe build. It is
+	// constant across targets: the gateway does not model a target that needs a
+	// different timeout.
+	Config  protocol.MeasurementConfig `json:"config"`
+	Targets []targetEntry              `json:"targets"`
 }
 
 type targetEntry struct {
@@ -47,6 +52,9 @@ func (s *Server) handleTargets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The list is recomputed per request rather than cached: it is one indexed
+	// read, and a cache would have to be invalidated by the admin UI, which owns
+	// the table. The measurement config is a constant.
 	targets, err := s.store.DispatchTargets()
 	if err != nil {
 		s.logger.Error("failed to list dispatch targets", "error", err)
@@ -69,7 +77,11 @@ func (s *Server) handleTargets(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(targetsResponse{Version: targetsVersion, Targets: entries})
+	_ = json.NewEncoder(w).Encode(targetsResponse{
+		Version: targetsVersion,
+		Config:  protocol.DefaultMeasurementConfig(),
+		Targets: entries,
+	})
 
 	s.logger.Debug("served target list", "probe_id", probe.ProbeID, "targets", len(entries))
 }

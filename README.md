@@ -269,6 +269,12 @@ curl -H "Authorization: Bearer cqu_probe_xxx" https://netprobe.example.com/api/v
 ```json
 {
   "version": 1,
+  "config": {
+    "interval_ms": 10000,
+    "icmp": { "count": 5, "interval_ms": 200, "timeout_ms": 1000 },
+    "http": { "method": "GET", "follow_redirects": true, "verify_tls": true, "timeout_ms": 5000 },
+    "dns": { "transport": "udp", "timeout_ms": 3000 }
+  },
   "targets": [
     {"target_id": "aliyun_dns", "address": "223.5.5.5", "probe_types": ["icmp"]},
     {"target_id": "cqu_mirror", "address": "https://mirrors.cqu.edu.cn/", "probe_types": ["http"]}
@@ -279,16 +285,23 @@ curl -H "Authorization: Bearer cqu_probe_xxx" https://netprobe.example.com/api/v
 `address` 的含义由 `probe_types` 决定：`icmp` 是要 ping 的 IP/域名，`dns` 是要查询的 DNS
 服务器地址，`http` 是完整 URL。
 
+`config` 是**测量参数**：探测周期、ICMP 每轮次数与超时、HTTP 方法/重定向/证书校验/超时、
+DNS 传输层与超时。它让这批参数由 Gateway 统一定义，而不是编译进每个探针——调整一次即可对
+所有探针生效（探针下次刷新时），不必重新部署探针。所有时间单位一律毫秒；ICMP 整轮的最坏
+耗时（`4×200 + 1000 = 1800 ms`）必须小于 `interval_ms`，这条约束由测试守着。
+
 **不下发的 Target：** 已禁用的、地址为空的、以及没有任何允许探测类型的。因此 `address`
 是运行数据而不是备注——**地址没填的 Target 探针根本看不到**，管理页面上会以红色标出。
 
-响应按 `target_id` 稳定排序，探针可以直接 diff 两次响应来决定是否重建测量计划。响应里
-**不含**显示名与备注，探针不应依赖它们。
+响应按 `target_id` 稳定排序，探针可以直接 diff 两次响应来决定是否重建测量计划（`config`
+也在 diff 范围内）。响应里**不含**显示名与备注，探针不应依赖它们。
 
 该端点复用 push 的认证与认证失败限流；探针侧建议启动拉取一次、之后每 5 分钟刷新，刷新
 失败时沿用上一份列表继续工作（不要阻塞测量循环）。
 
 > 这是协议的**增量**补充（协议 §32）：不调用它的探针行为完全不变，因此协议版本仍是 `1`。
+
+> 推送与目标分发两个端点的机器可读描述见 `docs/openapi.json`（§12）。
 
 ## 8. Prometheus scrape 配置
 
@@ -464,6 +477,17 @@ docker compose logs gateway | grep -i password
 | 文件 | 内容 |
 |---|---|
 | `CQU NetProbe Protocol v1.md` | **权威**。Probe 与 Gateway 之间的协议定义 |
+| `docs/openapi.json` | 接口的 OpenAPI **3.1** 描述，见下 |
 | `docs/targets-v1.md` | Protocol v1 §12 要求的双方共同 Target 定义 |
 | `.env.example` | 全部环境变量及其注释 |
 | `docs/superpowers/specs/` | 设计文档（内部） |
+
+`docs/openapi.json` 可直接导入 Swagger UI、Postman 或用于生成客户端。协议文档是权威定义，
+它是协议文档的机器可读表达，两者冲突时以协议文档为准。
+
+它覆盖 `/api/v1/push`、`/api/v1/targets` 与 `/metrics`；管理页面与自助注册页面是 HTML
+表单界面，不属于它的范围。
+
+文件是手写的，所以由测试守着：`internal/api/openapi_test.go` 与 `cmd/gateway/main_test.go`
+会真的发请求，断言每个状态码、每个字段名、每个 `config` 数值都与网关实际行为一致。任何
+一边改了而另一边没跟上，测试就会失败——这是这份文档不会随时间变成谎言的唯一原因。

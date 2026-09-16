@@ -1,9 +1,11 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"reflect"
 	"regexp"
 	"strings"
@@ -60,6 +62,52 @@ func TestBuildMetricsHandler(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("/metrics does not expose %q", want)
 		}
+	}
+}
+
+// The spec is the only place /metrics is described, and it is the one path an
+// OpenAPI tool will hand to someone who cannot read the deployment. So the
+// documented path has to be the registered one, and the documented 403 has to
+// be what a caller outside the allowlist actually gets.
+func TestMetricsMuxServesTheDocumentedPath(t *testing.T) {
+	raw, err := os.ReadFile("../../docs/openapi.json")
+	if err != nil {
+		t.Fatalf("read docs/openapi.json: %v", err)
+	}
+	var spec struct {
+		Paths map[string]map[string]struct {
+			Responses map[string]json.RawMessage `json:"responses"`
+		} `json:"paths"`
+	}
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		t.Fatalf("docs/openapi.json is not valid JSON: %v", err)
+	}
+	if len(spec.Paths) == 0 {
+		t.Fatal("the spec documents no paths")
+	}
+
+	operations := spec.Paths["/metrics"]
+	if len(operations) == 0 {
+		t.Fatal("the spec documents no /metrics operation")
+	}
+
+	// The spec's key is the media-type-facing method name in lower case.
+	op, ok := operations["get"]
+	if !ok {
+		t.Fatalf("/metrics is documented as %v, want get", operations)
+	}
+	if _, ok := op.Responses["403"]; !ok {
+		t.Error("/metrics no longer documents the 403 an allowlisted-out caller receives")
+	}
+
+	// httptest gives every request a non-loopback RemoteAddr, so this is the
+	// allowlisted-out caller the 403 above describes.
+	cfg := &config.Config{MetricsAllowedCIDRs: nil}
+	rec := httptest.NewRecorder()
+	metricsMux(cfg, prometheus.NewRegistry()).
+		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("GET /metrics from outside the allowlist = %d, want 403", rec.Code)
 	}
 }
 

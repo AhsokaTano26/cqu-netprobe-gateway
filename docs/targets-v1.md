@@ -8,7 +8,7 @@ Target ID：重命名会产生新的 Prometheus Series，并把历史时序孤�
 
 | Target ID | Probe Types | Address | 状态 |
 |---|---|---|---|
-| `campus_dns` | icmp, dns | **TODO — 待填写** | 播种时无地址 |
+| `campus_dns` | icmp, dns | **TODO — 待填写** | 播种时无地址，因此**不下发**给探针 |
 | `aliyun_dns` | icmp | 223.5.5.5 | 已播种 |
 | `dnspod_dns` | icmp | 119.29.29.29 | 已播种 |
 | `cloudflare_dns` | icmp | 1.1.1.1 | 已播种 |
@@ -17,7 +17,17 @@ Target ID：重命名会产生新的 Prometheus Series，并把历史时序孤�
 ## 待办事项
 
 `campus_dns` 尚未确认实际地址。校园 DNS 服务器确定后，请在 `/admin/targets` 补填。
-该地址仅为文档用途——Gateway 自身从不访问任何 Target——但 Probe 侧的配置必须与之保持一致。
+Gateway 自身从不访问任何 Target，但**地址为空或全为空白的 Target 不会下发给探针**——
+在补填之前，探针既看不到它，也不会测量它。
+
+## 探针如何拿到这份列表
+
+探针在运行时通过 `GET /api/v1/targets` 拉取本表（协议 §32），地址与允许的测量类型都在
+响应里，不必编译进探针。响应同时包含 `config`：探测周期与 ICMP／HTTP／DNS 的各项参数，
+同样是 Gateway 统一定义、探针拉取生效（协议 §32.4）。
+
+因此本文件的角色是**记录双方的共同约定**，而不是探针的配置来源。探针的实际行为以下发的
+响应为准；本文与之下不一致时，以 Gateway 下发的为准，并应当尽快修正本文。
 
 ## 播种语义
 

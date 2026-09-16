@@ -107,6 +107,16 @@ func metricsHandler(reg *prometheus.Registry) http.Handler {
 	})
 }
 
+// metricsMux is the metrics listener's route table. /metrics is registered here
+// rather than in buildHandler because it lives on its own listener, behind its
+// own allowlist (design doc §22). It is a function so the route the binary
+// serves is testable without opening a socket.
+func metricsMux(cfg *config.Config, reg *prometheus.Registry) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.Handle("GET /metrics", api.CIDRAllowlist(cfg.MetricsAllowedCIDRs, metricsHandler(reg)))
+	return mux
+}
+
 func main() {
 	if err := run(); err != nil {
 		// Nothing sensitive reaches this path: errors are wrapped, never dumped.
@@ -167,11 +177,9 @@ func run() error {
 		ErrorLog:          slog.NewLogLogger(logger.Handler(), slog.LevelError),
 	}
 
-	metricsMux := http.NewServeMux()
-	metricsMux.Handle("GET /metrics", api.CIDRAllowlist(cfg.MetricsAllowedCIDRs, metricsHandler(reg)))
 	metricsSrv := &http.Server{
 		Addr:              cfg.MetricsAddr,
-		Handler:           metricsMux,
+		Handler:           metricsMux(cfg, reg),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      30 * time.Second,
