@@ -174,19 +174,22 @@ func TestTokenPageOffersClickToCopyAndReturn(t *testing.T) {
 	}
 	body := page.Body.String()
 
-	for _, id := range []string{"v-probe-id", "v-token", "v-endpoint"} {
-		if !strings.Contains(body, `data-copy="#`+id+`"`) {
-			t.Errorf("no click-to-copy button targets #%s", id)
+	// Each value is its own plain <code> with a small button beside it — never a
+	// wrapper of its own — so the text stays freely selectable and a drag to
+	// select cannot fire a copy. The button reads the text of the element it
+	// names, which is what keeps the bytes copied equal to the bytes on screen.
+	rows := map[string]string{
+		"v-probe-id": `hx-sy01-[a-z0-9]{6}`,
+		"v-token":    `cqu_probe_[A-Za-z0-9_-]{43}`,
+		"v-endpoint": `https://netprobe\.example\.com/api/v1/push`,
+	}
+	for id, value := range rows {
+		re := regexp.MustCompile(`(?s)<div class="copy-row">\s*<code id="` + id + `">` +
+			value + `</code>\s*<button[^>]*data-copy="#` + id + `"[^>]*>复制</button>\s*</div>`)
+		if !re.MatchString(body) {
+			t.Errorf("row %s is not a plain value with a copy button of its own; around it:\n%s",
+				id, excerpt(body, `id="`+id+`"`))
 		}
-	}
-	// Each button copies the text of the element it names, so the bytes copied
-	// are exactly the bytes on screen. That only holds if the value really is
-	// inside that element.
-	if !regexp.MustCompile(`id="v-token">cqu_probe_[A-Za-z0-9_-]{43}<`).MatchString(body) {
-		t.Error("the token is not inside the element its copy button targets")
-	}
-	if !regexp.MustCompile(`id="v-endpoint">https://netprobe\.example\.com/api/v1/push<`).MatchString(body) {
-		t.Error("the push endpoint is not inside the element its copy button targets")
 	}
 	if !strings.Contains(body, `<a class="btn secondary" href="/">`) {
 		t.Error("the token page does not offer a return to the registration form")
@@ -196,6 +199,20 @@ func TestTokenPageOffersClickToCopyAndReturn(t *testing.T) {
 	if !strings.Contains(body, `src="/static/app.js"`) {
 		t.Error("the layout does not load the copy handler")
 	}
+}
+
+// excerpt returns the markup around marker, so a layout failure reports the row
+// at fault rather than the whole page.
+func excerpt(body, marker string) string {
+	const width = 240
+	i := strings.Index(body, marker)
+	if i < 0 {
+		return "(the page has no " + marker + ")"
+	}
+	start := max(i-width/2, 0)
+	end := min(start+width, len(body))
+	// A byte window can cut a multi-byte character in half; drop the fragments.
+	return strings.ToValidUTF8(body[start:end], "")
 }
 
 // TestTokenPageReturnsWhereTheMinterSaid keeps the admin flows out of the public

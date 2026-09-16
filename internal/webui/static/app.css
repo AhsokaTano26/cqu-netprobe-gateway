@@ -67,23 +67,23 @@ code, .mono {
 .filters a.active { color: var(--accent); font-weight: 600; }
 .error { color: var(--bad); background: #fdeceb; padding: 10px 12px; border-radius: 6px; }
 .notice { color: var(--warn); background: #fdf6e3; padding: 12px; border-radius: 6px; }
-/* A value the user has to retype elsewhere. The whole box is the button, so the
-   target is the value itself rather than a small icon beside it. */
-.copy-field {
-  display: flex; align-items: center; gap: 12px; width: 100%;
-  background: #f1f3f5; color: var(--ink); text-align: left;
-  border: 1px solid transparent; border-radius: 8px;
-  padding: 14px 16px; margin: 0 0 16px;
+/* A value the user has to retype elsewhere: freely selectable text, with its own
+   small button beside it, so dragging to select never fires a copy. */
+.copy-row { display: flex; align-items: center; gap: 8px; margin: 0 0 16px; }
+.copy-row code {
+  flex: 1; min-width: 0; font-size: 15px; word-break: break-all;
+  padding: 14px 16px; border-radius: 8px;
 }
-.copy-field:hover { filter: none; border-color: var(--accent); }
-.copy-field:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
-.copy-field.copied { border-color: var(--ok); }
-.copy-field code {
-  flex: 1; background: none; padding: 0; font-size: 15px;
-  word-break: break-all; user-select: text;
+.copy-btn {
+  flex: none; min-width: 78px; text-align: center;
+  padding: 8px 10px; font-size: 13px;
+  background: var(--panel); color: var(--muted);
+  border: 1px solid var(--line); border-radius: 6px;
 }
-.copy-hint { flex: none; font-size: 12px; color: var(--muted); white-space: nowrap; }
-.copy-field.copied .copy-hint { color: var(--ok); font-weight: 600; }
+.copy-btn:hover { filter: none; border-color: var(--accent); color: var(--accent); }
+.copy-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.copy-btn.copied { border-color: var(--ok); color: var(--ok); font-weight: 600; }
+.copy-btn.failed { border-color: var(--bad); color: var(--bad); font-weight: 600; }
 a.btn, .btn {
   display: inline-block; padding: 8px 16px; border-radius: 6px;
   background: var(--accent); color: #fff; text-decoration: none;

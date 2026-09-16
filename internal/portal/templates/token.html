@@ -8,22 +8,22 @@
   <p class="muted">点击任意一行即可复制。</p>
 
   <h2>Probe ID</h2>
-  <button type="button" class="copy-field" data-copy="#v-probe-id" aria-live="polite">
+  <div class="copy-row">
     <code id="v-probe-id">{{.Pages.ProbeID}}</code>
-    <span class="copy-hint">复制</span>
-  </button>
+    <button type="button" class="copy-btn" data-copy="#v-probe-id" aria-live="polite">复制</button>
+  </div>
 
   <h2>Token</h2>
-  <button type="button" class="copy-field" data-copy="#v-token" aria-live="polite">
+  <div class="copy-row">
     <code id="v-token">{{.Pages.Token}}</code>
-    <span class="copy-hint">复制</span>
-  </button>
+    <button type="button" class="copy-btn" data-copy="#v-token" aria-live="polite">复制</button>
+  </div>
 
   <h2>Push Endpoint</h2>
-  <button type="button" class="copy-field" data-copy="#v-endpoint" aria-live="polite">
+  <div class="copy-row">
     <code id="v-endpoint">{{.Pages.PushEndpoint}}</code>
-    <span class="copy-hint">复制</span>
-  </button>
+    <button type="button" class="copy-btn" data-copy="#v-endpoint" aria-live="polite">复制</button>
+  </div>
 
   <p class="muted">
     探针配置好并开始推送后，管理页面会显示为「待启用」。管理员启用之前，

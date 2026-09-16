@@ -39,22 +39,36 @@
     return copied ? Promise.resolve() : Promise.reject(new Error("copy failed"));
   }
 
-  // flash swaps the button's hint for a result message, then puts it back. The
-  // hint is inside an aria-live region, so the outcome is announced rather than
-  // only shown.
-  function flash(button, message) {
-    var hint = button.querySelector(".copy-hint") || button;
-    if (hint.dataset.busy === "1") {
+  // select highlights a value so the user can copy it by hand. It is the
+  // fallback for a blocked clipboard: the message alone would leave them to
+  // select a 53-character token by dragging.
+  function select(element) {
+    var selection = window.getSelection();
+    if (!selection) {
       return;
     }
-    hint.dataset.busy = "1";
-    var original = hint.textContent;
-    hint.textContent = message;
-    button.classList.add("copied");
+    var range = document.createRange();
+    range.selectNodeContents(element);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
+  // flash swaps the button's label for a result message, then puts it back. The
+  // label sits in an aria-live region, so the outcome is announced as well as
+  // shown. The stylesheet reserves the width of the longest message, so the
+  // value beside it never reflows.
+  function flash(button, message, state) {
+    if (button.dataset.busy === "1") {
+      return;
+    }
+    button.dataset.busy = "1";
+    var original = button.textContent;
+    button.textContent = message;
+    button.classList.add(state);
     window.setTimeout(function () {
-      hint.textContent = original;
-      hint.dataset.busy = "";
-      button.classList.remove("copied");
+      button.textContent = original;
+      button.dataset.busy = "";
+      button.classList.remove(state);
     }, RESET_MS);
   }
 
@@ -69,10 +83,11 @@
     }
     copy(source.textContent.trim()).then(
       function () {
-        flash(button, "已复制 ✓");
+        flash(button, "已复制 ✓", "copied");
       },
       function () {
-        flash(button, "复制失败，请手动选择");
+        select(source);
+        flash(button, "复制失败", "failed");
       }
     );
   });
