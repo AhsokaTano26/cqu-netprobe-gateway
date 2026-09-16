@@ -14,6 +14,7 @@ func clearEnv(t *testing.T) {
 		"LISTEN_ADDR", "METRICS_ADDR", "DATA_DIR", "PUBLIC_BASE_URL",
 		"ADMIN_USERNAME", "ADMIN_PASSWORD", "ONLINE_THRESHOLD",
 		"RATE_LIMIT", "RATE_LIMIT_BURST", "METRICS_ALLOWED_CIDRS", "LOG_LEVEL",
+		"REGISTER_LIMIT", "REGISTER_LIMIT_BURST",
 	} {
 		t.Setenv(k, "")
 	}
@@ -109,6 +110,56 @@ func TestLoadRejectsBadValues(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tc.key) {
 				t.Fatalf("Load() with %s=%q: error %q does not name the offending key", tc.key, tc.val, err)
+			}
+		})
+	}
+}
+
+func TestLoadRegistrationLimitDefaults(t *testing.T) {
+	clearEnv(t)
+	for _, k := range []string{"REGISTER_LIMIT", "REGISTER_LIMIT_BURST"} {
+		t.Setenv(k, "")
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.RegisterLimit != time.Hour {
+		t.Errorf("RegisterLimit = %v, want 1h", cfg.RegisterLimit)
+	}
+	if cfg.RegisterLimitBurst != 3 {
+		t.Errorf("RegisterLimitBurst = %d, want 3", cfg.RegisterLimitBurst)
+	}
+}
+
+func TestLoadRegistrationLimitOverrides(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("REGISTER_LIMIT", "30m")
+	t.Setenv("REGISTER_LIMIT_BURST", "7")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.RegisterLimit != 30*time.Minute {
+		t.Errorf("RegisterLimit = %v, want 30m", cfg.RegisterLimit)
+	}
+	if cfg.RegisterLimitBurst != 7 {
+		t.Errorf("RegisterLimitBurst = %d, want 7", cfg.RegisterLimitBurst)
+	}
+}
+
+func TestLoadRejectsBadRegistrationLimit(t *testing.T) {
+	for _, tc := range []struct{ key, val string }{
+		{"REGISTER_LIMIT", "0s"},
+		{"REGISTER_LIMIT", "-5m"},
+		{"REGISTER_LIMIT_BURST", "0"},
+		{"REGISTER_LIMIT_BURST", "-1"},
+	} {
+		t.Run(tc.key+"="+tc.val, func(t *testing.T) {
+			clearEnv(t)
+			t.Setenv(tc.key, tc.val)
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load() with %s=%s: want error, got nil", tc.key, tc.val)
 			}
 		})
 	}

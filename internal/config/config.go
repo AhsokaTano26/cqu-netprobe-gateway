@@ -13,15 +13,21 @@ import (
 
 // Config holds all runtime configuration. Sensitive values must never be logged.
 type Config struct {
-	ListenAddr          string
-	MetricsAddr         string
-	DataDir             string
-	PublicBaseURL       string
-	AdminUsername       string
-	AdminPassword       string // empty means "generate one at startup"
-	OnlineThreshold     time.Duration
-	RateLimit           time.Duration
-	RateLimitBurst      int
+	ListenAddr      string
+	MetricsAddr     string
+	DataDir         string
+	PublicBaseURL   string
+	AdminUsername   string
+	AdminPassword   string // empty means "generate one at startup"
+	OnlineThreshold time.Duration
+	RateLimit       time.Duration
+	RateLimitBurst  int
+	// RegisterLimit is how often one IP may create a probe through the public
+	// registration page. Much looser than RateLimit: a person registers once or
+	// twice, so this exists to stop scripts filling the probes table, not to
+	// shape normal traffic.
+	RegisterLimit       time.Duration
+	RegisterLimitBurst  int
 	MetricsAllowedCIDRs []*net.IPNet
 	LogLevel            slog.Level
 }
@@ -63,6 +69,22 @@ func Load() (*Config, error) {
 	}
 	if cfg.RateLimitBurst < 1 {
 		return nil, fmt.Errorf("config: RATE_LIMIT_BURST must be >= 1, got %d", cfg.RateLimitBurst)
+	}
+
+	if cfg.RegisterLimit, err = durationEnv("REGISTER_LIMIT", time.Hour); err != nil {
+		return nil, err
+	}
+	if cfg.RegisterLimit <= 0 {
+		return nil, fmt.Errorf("config: REGISTER_LIMIT must be positive, got %s", cfg.RegisterLimit)
+	}
+
+	regBurst := envOr("REGISTER_LIMIT_BURST", "3")
+	cfg.RegisterLimitBurst, err = strconv.Atoi(regBurst)
+	if err != nil {
+		return nil, fmt.Errorf("config: REGISTER_LIMIT_BURST %q is not an integer: %w", regBurst, err)
+	}
+	if cfg.RegisterLimitBurst < 1 {
+		return nil, fmt.Errorf("config: REGISTER_LIMIT_BURST must be >= 1, got %d", cfg.RegisterLimitBurst)
 	}
 
 	if cfg.MetricsAllowedCIDRs, err = parseCIDRs(envOr("METRICS_ALLOWED_CIDRS", "")); err != nil {
