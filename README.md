@@ -427,9 +427,13 @@ scrape_configs:
 - `scrape_interval` 建议不超过 `15s`，它决定了看板的时间分辨率。
 - 若 Prometheus 不在同一台机器/同一个 network namespace，需要先按 5.5 同时放开
   `METRICS_ADDR` 与 `METRICS_ALLOWED_CIDRS`。
-- 白名单匹配的是**直连 peer 地址**，`X-Forwarded-For` 等转发头被刻意忽略。因此若
-  Prometheus 经反向代理抓取，白名单里要写代理的地址。
+- 白名单匹配的是**客户端地址**。直连时就是 peer 地址；经过反向代理时按
+  `TRUSTED_PROXY_CIDRS`（§5.6）判定后取真实地址。**代理没声明在受信网段里**，白名单
+  看到的就是代理地址 —— 配错的表现是「谁都被 403」或「谁都被放行」，两种都难自查。
 - `/metrics` 未配置任何认证，安全性完全依赖网络层。不要把它暴露到公网。
+
+> **完整的接入说明、指标速查表、PromQL、告警规则与 Grafana 面板，见
+> [`docs/prometheus.md`](docs/prometheus.md)。** 下面 §9 只是指标清单。
 
 ## 9. `/metrics` 指标说明
 
@@ -584,6 +588,8 @@ docker compose logs gateway | grep -i password
 | 文件 | 内容 |
 |---|---|
 | `CQU NetProbe Protocol v1.md` | **权威**。Probe 与 Gateway 之间的协议定义 |
+| `docs/prometheus.md` | 接入 Prometheus / Grafana：抓取配置、指标速查、PromQL、告警规则 |
+| `docs/grafana-dashboard.json` | 可直接导入的 Grafana 面板 |
 | `docs/openapi.json` | 接口的 OpenAPI **3.1** 描述，见下 |
 | `docs/targets-v1.md` | Protocol v1 §12 要求的双方共同 Target 定义 |
 | `.env.example` | 全部环境变量及其注释 |
