@@ -84,6 +84,40 @@ code, .mono {
 .copy-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .copy-btn.copied { border-color: var(--ok); color: var(--ok); font-weight: 600; }
 .copy-btn.failed { border-color: var(--bad); color: var(--bad); font-weight: 600; }
+/* Dropdowns. The native <select> stays in the DOM as the value carrier and is
+   hidden only once app.js has built the listbox that replaces it, so a browser
+   that never runs the script still shows a working select. */
+.select { position: relative; }
+.select.ready > select { display: none; }
+.select-trigger {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; text-align: left; cursor: pointer;
+  padding: 8px 10px; font: inherit; color: var(--ink);
+  background: #fff; border: 1px solid var(--line); border-radius: 6px;
+}
+.select-trigger:hover { border-color: var(--muted); }
+.select-trigger[aria-expanded="true"] { border-color: var(--accent); }
+.select-trigger:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.select-trigger:disabled { background: #f1f3f5; color: var(--muted); cursor: default; }
+.select-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.select-value.placeholder { color: var(--muted); }
+.select-arrow { flex: none; color: var(--muted); transition: transform .12s ease; }
+.select-trigger[aria-expanded="true"] .select-arrow { transform: rotate(180deg); }
+.select-menu {
+  position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 4px);
+  margin: 0; padding: 4px; list-style: none;
+  max-height: 260px; overflow-y: auto;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 10px 24px rgba(28, 32, 36, .12);
+}
+.select-menu[hidden] { display: none; }
+.select.drop-up .select-menu { top: auto; bottom: calc(100% + 4px); }
+.select-option { padding: 8px 10px; border-radius: 6px; cursor: pointer; }
+.select-option.active { background: #eef2fb; }
+.select-option[aria-selected="true"] { color: var(--accent); font-weight: 600; }
+.select-option[aria-selected="true"]::after { content: "✓"; float: right; }
+.select-option.disabled { color: var(--muted); cursor: default; }
+.select.invalid .select-trigger { border-color: var(--bad); }
 a.btn, .btn {
   display: inline-block; padding: 8px 16px; border-radius: 6px;
   background: var(--accent); color: #fff; text-decoration: none;

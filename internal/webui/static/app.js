@@ -92,3 +92,320 @@
     );
   });
 })();
+
+// Custom dropdowns.
+//
+// The open list of a native <select> is painted by the operating system and no
+// stylesheet can reach it, which is why a native select looks like a native
+// select no matter what the closed control looks like. So every <select> inside
+// a .select wrapper is augmented with a listbox we draw ourselves, following
+// the ARIA select-only combobox pattern.
+//
+// The native element stays in the DOM, hidden, and remains the value carrier:
+// it keeps its name and its place in the form, so submission and form.reset()
+// need no knowledge of any of this. Without scripting none of this runs and the
+// native select stays visible — the .ready class added here is what hides it.
+(function () {
+  "use strict";
+
+  var TYPEAHEAD_MS = 1000;
+  var instances = [];
+  var seq = 0;
+
+  // labelFor reads the field caption from the wrapping <label>, minus the
+  // control itself: "校区" from <label>校区 <div class="select">…</div></label>.
+  // It becomes the accessible name of a control that is no longer the one the
+  // label points at.
+  function labelFor(select) {
+    var label = select.closest("label");
+    if (!label) {
+      return select.name || "";
+    }
+    var copy = label.cloneNode(true);
+    var wrapper = copy.querySelector(".select") || copy.querySelector("select");
+    if (wrapper) {
+      wrapper.remove();
+    }
+    return copy.textContent.replace(/\s+/g, " ").trim();
+  }
+
+  function enhance(wrapper) {
+    var select = wrapper.querySelector("select");
+    if (!select || wrapper.classList.contains("ready")) {
+      return;
+    }
+
+    var id = "select-" + ++seq;
+    var name = labelFor(select);
+    var options = Array.prototype.map.call(select.options, function (option) {
+      return {
+        label: option.textContent.replace(/\s+/g, " ").trim(),
+        disabled: option.disabled
+      };
+    });
+
+    var trigger = document.createElement("button");
+    trigger.type = "button";
+    trigger.className = "select-trigger";
+    trigger.setAttribute("role", "combobox");
+    trigger.setAttribute("aria-haspopup", "listbox");
+    trigger.setAttribute("aria-expanded", "false");
+    trigger.setAttribute("aria-controls", id);
+    if (name) {
+      trigger.setAttribute("aria-label", name);
+    }
+    if (select.required) {
+      trigger.setAttribute("aria-required", "true");
+    }
+    trigger.disabled = select.disabled;
+
+    var value = document.createElement("span");
+    value.className = "select-value";
+    var arrow = document.createElement("span");
+    arrow.className = "select-arrow";
+    arrow.setAttribute("aria-hidden", "true");
+    arrow.textContent = "▾";
+    trigger.appendChild(value);
+    trigger.appendChild(arrow);
+
+    var menu = document.createElement("ul");
+    menu.className = "select-menu";
+    menu.id = id;
+    menu.setAttribute("role", "listbox");
+    if (name) {
+      menu.setAttribute("aria-label", name);
+    }
+    menu.hidden = true;
+
+    var items = options.map(function (option, i) {
+      var li = document.createElement("li");
+      li.className = "select-option";
+      li.id = id + "-option-" + i;
+      li.setAttribute("role", "option");
+      li.setAttribute("aria-selected", "false");
+      if (option.disabled) {
+        li.setAttribute("aria-disabled", "true");
+        li.classList.add("disabled");
+      }
+      li.textContent = option.label;
+      menu.appendChild(li);
+      return li;
+    });
+
+    wrapper.appendChild(trigger);
+    wrapper.appendChild(menu);
+
+    var active = 0;
+    var typed = "";
+    var typedAt = 0;
+
+    function sync() {
+      var index = select.selectedIndex;
+      value.textContent = index >= 0 ? options[index].label : "";
+      value.classList.toggle("placeholder", select.value === "");
+      items.forEach(function (li, i) {
+        li.setAttribute("aria-selected", i === index ? "true" : "false");
+      });
+      wrapper.classList.remove("invalid");
+      trigger.removeAttribute("aria-invalid");
+    }
+
+    function setActive(index) {
+      if (index < 0) {
+        index = 0;
+      }
+      if (index >= items.length) {
+        index = items.length - 1;
+      }
+      if (index < 0) {
+        return;
+      }
+      active = index;
+      items.forEach(function (li, i) {
+        li.classList.toggle("active", i === index);
+      });
+      trigger.setAttribute("aria-activedescendant", items[index].id);
+      items[index].scrollIntoView({ block: "nearest" });
+    }
+
+    function open() {
+      if (!menu.hidden) {
+        return;
+      }
+      menu.hidden = false;
+      trigger.setAttribute("aria-expanded", "true");
+      // A list that would run past the bottom of the window opens upwards
+      // instead, but only when there is more room up there than down.
+      var triggerBox = trigger.getBoundingClientRect();
+      var below = window.innerHeight - triggerBox.bottom;
+      wrapper.classList.toggle("drop-up", menu.offsetHeight > below && triggerBox.top > below);
+      setActive(select.selectedIndex >= 0 ? select.selectedIndex : 0);
+    }
+
+    function close() {
+      if (menu.hidden) {
+        return;
+      }
+      menu.hidden = true;
+      trigger.setAttribute("aria-expanded", "false");
+      trigger.removeAttribute("aria-activedescendant");
+      wrapper.classList.remove("drop-up");
+    }
+
+    function choose(index) {
+      if (index < 0 || index >= options.length || options[index].disabled) {
+        return;
+      }
+      if (select.selectedIndex !== index) {
+        select.selectedIndex = index;
+        // A bubbling change keeps any inline onchange on the wrapper working:
+        // the handler is attached to the wrapper precisely so it fires for both
+        // the native control and this one.
+        select.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      sync();
+      close();
+      trigger.focus();
+    }
+
+    function typeahead(character) {
+      var now = Date.now();
+      typed = (now - typedAt < TYPEAHEAD_MS ? typed : "") + character.toLowerCase();
+      typedAt = now;
+      var start = (menu.hidden ? select.selectedIndex : active) + 1;
+      for (var offset = 0; offset < items.length; offset++) {
+        var i = (start + offset + items.length) % items.length;
+        if (options[i].label.toLowerCase().indexOf(typed) === 0) {
+          open();
+          setActive(i);
+          return;
+        }
+      }
+    }
+
+    trigger.addEventListener("click", function () {
+      if (menu.hidden) {
+        open();
+      } else {
+        close();
+      }
+    });
+
+    trigger.addEventListener("keydown", function (event) {
+      switch (event.key) {
+        case "ArrowDown":
+          event.preventDefault();
+          if (menu.hidden) {
+            open();
+          } else {
+            setActive(active + 1);
+          }
+          break;
+        case "ArrowUp":
+          event.preventDefault();
+          if (menu.hidden) {
+            open();
+          } else {
+            setActive(active - 1);
+          }
+          break;
+        case "Home":
+          if (!menu.hidden) {
+            event.preventDefault();
+            setActive(0);
+          }
+          break;
+        case "End":
+          if (!menu.hidden) {
+            event.preventDefault();
+            setActive(items.length - 1);
+          }
+          break;
+        case "Enter":
+        case " ":
+          // preventDefault also suppresses the click this key would fire on a
+          // button, which would otherwise toggle the menu straight back shut.
+          event.preventDefault();
+          if (menu.hidden) {
+            open();
+          } else {
+            choose(active);
+          }
+          break;
+        case "Escape":
+          if (!menu.hidden) {
+            event.preventDefault();
+            close();
+          }
+          break;
+        case "Tab":
+          close();
+          break;
+        default:
+          if (event.key.length === 1) {
+            typeahead(event.key);
+          }
+      }
+    });
+
+    // mousedown is prevented so the trigger keeps focus and the click below
+    // still lands on the option the pointer went down on.
+    menu.addEventListener("mousedown", function (event) {
+      event.preventDefault();
+    });
+    menu.addEventListener("click", function (event) {
+      var li = event.target.closest(".select-option");
+      if (li) {
+        choose(items.indexOf(li));
+      }
+    });
+
+    // A value set from elsewhere (a script, autofill) must show up here too.
+    select.addEventListener("change", sync);
+
+    wrapper.classList.add("ready");
+    sync();
+
+    instances.push({
+      wrapper: wrapper,
+      trigger: trigger,
+      select: select,
+      required: select.required,
+      close: close
+    });
+  }
+
+  document.querySelectorAll(".select > select").forEach(function (select) {
+    enhance(select.parentNode);
+  });
+
+  document.addEventListener("mousedown", function (event) {
+    instances.forEach(function (instance) {
+      if (!instance.wrapper.contains(event.target)) {
+        instance.close();
+      }
+    });
+  });
+
+  // A required select is hidden once enhanced, and a hidden control is barred
+  // from the browser's own constraint validation — so the check is repeated
+  // here rather than silently lost. The server validates the same fields
+  // anyway; this only saves a round trip and a lost form fill.
+  document.addEventListener("submit", function (event) {
+    var firstBad = null;
+    instances.forEach(function (instance) {
+      if (!instance.required || instance.select.value !== "") {
+        return;
+      }
+      instance.wrapper.classList.add("invalid");
+      instance.trigger.setAttribute("aria-invalid", "true");
+      if (!firstBad) {
+        firstBad = instance;
+      }
+    });
+    if (firstBad) {
+      event.preventDefault();
+      firstBad.trigger.focus();
+    }
+  });
+})();

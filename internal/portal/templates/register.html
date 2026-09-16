@@ -10,27 +10,37 @@
     <p class="notice">管理员尚未配置任何校区，暂时无法注册。请联系网络中心。</p>
   {{else}}
   <form method="post" action="/">
+    {{/* The onchange sits on the wrapper, not the select: the dropdown is
+         rebuilt as a listbox by app.js, and a bubbling change event from the
+         (hidden) select is what reaches this handler. Reading event.target
+         rather than this.value is what makes it work for both. */}}
     <label>校区
-      <select name="campus_code" onchange="location.href='/?campus='+this.value" required>
-        <option value="">请选择校区…</option>
-        {{$sel := .Pages.campus}}
-        {{range .Pages.campuses}}
-          <option value="{{.Code}}" {{if eq .Code $sel}}selected{{end}}>{{.Name}}</option>
-        {{end}}
-      </select>
+      <div class="select" onchange="location.href='/?campus='+event.target.value">
+        <select name="campus_code" required>
+          <option value="">请选择校区…</option>
+          {{$sel := .Pages.campus}}
+          {{range .Pages.campuses}}
+            <option value="{{.Code}}" {{if eq .Code $sel}}selected{{end}}>{{.Name}}</option>
+          {{end}}
+        </select>
+      </div>
     </label>
     {{if .Pages.campus}}
     <label>楼栋
-      <select name="building_code" required>
-        <option value="">请选择楼栋…</option>
-        {{range .Pages.buildings}}<option value="{{.Code}}">{{.Name}}</option>{{end}}
-      </select>
+      <div class="select">
+        <select name="building_code" required>
+          <option value="">请选择楼栋…</option>
+          {{range .Pages.buildings}}<option value="{{.Code}}">{{.Name}}</option>{{end}}
+        </select>
+      </div>
     </label>
     <label>网络类型
-      <select name="network_type" required>
-        <option value="wired">有线 (wired)</option>
-        <option value="wireless">无线 (wireless)</option>
-      </select>
+      <div class="select">
+        <select name="network_type" required>
+          <option value="wired">有线 (wired)</option>
+          <option value="wireless">无线 (wireless)</option>
+        </select>
+      </div>
     </label>
     <label>备注（可选，不会进入监控 Label）
       <textarea name="description" rows="2" placeholder="例如：松园一栋 305 宿舍"></textarea>

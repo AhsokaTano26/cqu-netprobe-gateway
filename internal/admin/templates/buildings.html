@@ -55,12 +55,14 @@
   <form method="post" action="/admin/buildings/new">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
     <label>校区
-      <select name="campus_code" required>
-        {{$sel := .Pages.selectedCampus}}
-        {{range .Pages.campuses}}
-          <option value="{{.Code}}" {{if eq .Code $sel}}selected{{end}}>{{.Name}} ({{.Code}})</option>
-        {{end}}
-      </select>
+      <div class="select">
+        <select name="campus_code" required>
+          {{$sel := .Pages.selectedCampus}}
+          {{range .Pages.campuses}}
+            <option value="{{.Code}}" {{if eq .Code $sel}}selected{{end}}>{{.Name}} ({{.Code}})</option>
+          {{end}}
+        </select>
+      </div>
     </label>
     <label>楼栋代号（≤16 位小写字母/数字/下划线，进 Label，创建后不可改）
       <input type="text" name="code" placeholder="sy01" required>

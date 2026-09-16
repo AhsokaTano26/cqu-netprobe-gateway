@@ -13,26 +13,32 @@
       </p>
     {{else}}
     <label>校区
-      <select name="campus_code" required>
-        {{$sel := .Pages.campus}}
-        {{range .Pages.campuses}}
-          <option value="{{.Code}}" {{if eq .Code $sel}}selected{{end}}>{{.Name}} ({{.Code}})</option>
-        {{end}}
-      </select>
+      <div class="select">
+        <select name="campus_code" required>
+          {{$sel := .Pages.campus}}
+          {{range .Pages.campuses}}
+            <option value="{{.Code}}" {{if eq .Code $sel}}selected{{end}}>{{.Name}} ({{.Code}})</option>
+          {{end}}
+        </select>
+      </div>
     </label>
     <label>楼栋
-      <select name="building_code" required>
-        {{range .Pages.buildings}}<option value="{{.Code}}">{{.Name}} ({{.Code}})</option>{{end}}
-      </select>
+      <div class="select">
+        <select name="building_code" required>
+          {{range .Pages.buildings}}<option value="{{.Code}}">{{.Name}} ({{.Code}})</option>{{end}}
+        </select>
+      </div>
     </label>
     {{end}}
 
     <h2>网络类型</h2>
     <label>类型
-      <select name="network_type" required>
-        <option value="wired">wired</option>
-        <option value="wireless">wireless</option>
-      </select>
+      <div class="select">
+        <select name="network_type" required>
+          <option value="wired">wired</option>
+          <option value="wireless">wireless</option>
+        </select>
+      </div>
     </label>
 
     <h2>备注</h2>
