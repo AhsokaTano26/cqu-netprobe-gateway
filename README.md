@@ -96,7 +96,7 @@ docker compose up -d
 docker compose logs -f gateway
 ```
 
-镜像从 Docker Hub 拉取：`${IMAGE_REPO:-tano/cqu-netprobe-gateway}:${IMAGE_TAG:-latest}`。
+镜像从 Docker Hub 拉取：`${IMAGE_REPO:-tano26/cqu-netprobe-gateway}:${IMAGE_TAG:-latest}`。
 也可以就地构建（`docker compose build`），或在本地直接运行二进制：
 
 ```bash
@@ -259,7 +259,7 @@ image  →  构建并推送多架构镜像到 Docker Hub              （每次 
 |---|---|---|
 | `LISTEN_HOST_PORT` | `8080` | 公开 listener 发布到宿主机的端口 |
 | `PUID` / `PGID` | `65532` / `65532` | 容器进程的 uid:gid。原生 Linux 上见 5.3 |
-| `IMAGE_REPO` | `tano/cqu-netprobe-gateway` | 镜像仓库，换镜像源或 fork 时覆盖 |
+| `IMAGE_REPO` | `tano26/cqu-netprobe-gateway` | 镜像仓库，换镜像源或 fork 时覆盖 |
 | `IMAGE_TAG` | `latest` | 镜像 tag，也作为构建时的 `VERSION` |
 
 > **`ONLINE_THRESHOLD` 警告：** Protocol v1 §26 把在线判定固定为 `age <= 30s`，
