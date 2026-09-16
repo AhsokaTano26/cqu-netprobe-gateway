@@ -498,3 +498,86 @@ func TestProbeDetailRendersProbe(t *testing.T) {
 		t.Error("the detail page's action forms have no csrf field")
 	}
 }
+
+// seedPendingProbe inserts a probe as the public page would: disabled and
+// attributable to self-registration.
+func seedPendingProbe(t *testing.T, h *adminHarness, probeID, tokenHash string) {
+	t.Helper()
+	if err := h.store.CreateProbe(&store.Probe{
+		ProbeID: probeID, TokenHash: tokenHash,
+		CampusCode: "hx", CampusName: "虎溪",
+		BuildingGroupCode: "sy", BuildingGroupName: "松园",
+		BuildingCode: "sy01", BuildingName: "松园一栋",
+		NetworkType: "wired", Enabled: false, CreatedVia: "public",
+	}); err != nil {
+		t.Fatalf("CreateProbe(%s) error = %v", probeID, err)
+	}
+}
+
+func TestProbeListShowsCredentialInventory(t *testing.T) {
+	h := newAdminHarness(t, "test-password-value")
+	cookie := h.login(t)
+
+	seedPendingProbe(t, h, "hx-sy01-cccccc", "hash-c")
+
+	body := h.get(t, "/admin", cookie).Body.String()
+	if !strings.Contains(body, "从未轮换") {
+		t.Error("a never-rotated credential is not labelled as such")
+	}
+	if !strings.Contains(body, "待启用") {
+		t.Error("a public registration awaiting approval is not badged")
+	}
+	if !strings.Contains(body, "hx-sy01-cccccc") {
+		t.Error("the probe is not listed at all")
+	}
+}
+
+func TestProbeListMarksRotatedCredentials(t *testing.T) {
+	h := newAdminHarness(t, "test-password-value")
+	cookie := h.login(t)
+	seedProbeForAdmin(t, h, "hx-sy01-dddddd", "hash-d")
+
+	before := h.get(t, "/admin", cookie).Body.String()
+	if !strings.Contains(before, "从未轮换") {
+		t.Fatal("a freshly created credential should read as never rotated")
+	}
+
+	if err := h.store.UpdateProbeToken("hx-sy01-dddddd", "hash-e"); err != nil {
+		t.Fatalf("UpdateProbeToken() error = %v", err)
+	}
+	after := h.get(t, "/admin", cookie).Body.String()
+	if strings.Contains(after, "从未轮换") {
+		t.Error("a rotated credential still reads as never rotated")
+	}
+}
+
+func TestProbeListStatusFilter(t *testing.T) {
+	h := newAdminHarness(t, "test-password-value")
+	cookie := h.login(t)
+	seedProbeForAdmin(t, h, "hx-sy01-aaaaaa", "hash-a")
+	seedPendingProbe(t, h, "hx-sy01-eeeeee", "hash-f")
+
+	pending := h.get(t, "/admin?filter=pending", cookie).Body.String()
+	if !strings.Contains(pending, "hx-sy01-eeeeee") {
+		t.Error("the pending filter dropped the probe awaiting approval")
+	}
+	if strings.Contains(pending, "hx-sy01-aaaaaa") {
+		t.Error("the pending filter included an enabled probe")
+	}
+
+	disabled := h.get(t, "/admin?filter=disabled", cookie).Body.String()
+	if strings.Contains(disabled, "hx-sy01-eeeeee") {
+		t.Error("a probe awaiting approval was counted as deliberately disabled")
+	}
+
+	all := h.get(t, "/admin?filter=all", cookie).Body.String()
+	if !strings.Contains(all, "hx-sy01-eeeeee") || !strings.Contains(all, "hx-sy01-aaaaaa") {
+		t.Error("the all filter dropped a probe")
+	}
+
+	// An unknown filter value must fall back to "all" rather than showing nothing.
+	bogus := h.get(t, "/admin?filter=nonsense", cookie).Body.String()
+	if !strings.Contains(bogus, "hx-sy01-aaaaaa") {
+		t.Error("an unrecognised filter value should behave as all")
+	}
+}

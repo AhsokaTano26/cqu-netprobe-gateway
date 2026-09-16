@@ -53,6 +53,10 @@ type probeRow struct {
 	Probe    store.Probe
 	Online   bool
 	LastSeen time.Time
+	// PendingApproval is true for a probe created through the public page that
+	// an administrator has not enabled yet. Without CreatedVia this would be
+	// indistinguishable from a probe deliberately disabled for maintenance.
+	PendingApproval bool
 }
 
 // onlineState mirrors the metrics collector's rule so the UI and /metrics never
@@ -68,6 +72,11 @@ func (s *Server) onlineState(p store.Probe, now time.Time) (bool, time.Time) {
 	return now.Sub(entry.ServerReceivedAt) <= s.onlineThreshold, entry.ServerReceivedAt
 }
 
+// probeFilters are the accepted values of the ?filter= query parameter.
+var probeFilters = map[string]bool{
+	"all": true, "online": true, "offline": true, "disabled": true, "pending": true,
+}
+
 func (s *Server) handleProbeList(w http.ResponseWriter, r *http.Request) {
 	sess, _ := s.sessionFromRequest(r)
 	probes, err := s.store.ListProbes()
@@ -77,19 +86,61 @@ func (s *Server) handleProbeList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	filter := r.URL.Query().Get("filter")
+	if !probeFilters[filter] {
+		filter = "all"
+	}
+
 	now := s.now()
 	rows := make([]probeRow, 0, len(probes))
 	for _, p := range probes {
 		online, lastSeen := s.onlineState(p, now)
-		rows = append(rows, probeRow{Probe: p, Online: online, LastSeen: lastSeen})
+		row := probeRow{
+			Probe: p, Online: online, LastSeen: lastSeen,
+			PendingApproval: p.CreatedVia == "public" && !p.Enabled,
+		}
+		if !matchesProbeFilter(filter, row) {
+			continue
+		}
+		rows = append(rows, row)
 	}
 
 	webui.Render(w, http.StatusOK, s.templates, "probes.html", webui.PageData{
-		Title:    "Probes",
-		Username: sess.username,
-		CSRF:     sess.csrf,
-		Pages:    map[string]any{"probes": rows, "now": now},
+		Title: "Probes", Username: sess.username, CSRF: sess.csrf,
+		Pages: map[string]any{"probes": rows, "now": now, "filter": filter,
+			"counts": countProbeFilters(probes, s, now)},
 	})
+}
+
+func matchesProbeFilter(filter string, row probeRow) bool {
+	switch filter {
+	case "pending":
+		return row.PendingApproval
+	case "disabled":
+		return !row.Probe.Enabled && !row.PendingApproval
+	case "online":
+		return row.Probe.Enabled && row.Online
+	case "offline":
+		return row.Probe.Enabled && !row.Online
+	default:
+		return true
+	}
+}
+
+// countProbeFilters computes each filter's count in one pass so the header can
+// show them without re-querying or re-walking per filter.
+func countProbeFilters(probes []store.Probe, s *Server, now time.Time) map[string]int {
+	counts := map[string]int{"all": len(probes)}
+	for _, p := range probes {
+		online, _ := s.onlineState(p, now)
+		row := probeRow{Probe: p, Online: online, PendingApproval: p.CreatedVia == "public" && !p.Enabled}
+		for _, f := range []string{"pending", "disabled", "online", "offline"} {
+			if matchesProbeFilter(f, row) {
+				counts[f]++
+			}
+		}
+	}
+	return counts
 }
 
 func (s *Server) handleProbeNewForm(w http.ResponseWriter, r *http.Request) {

@@ -3,11 +3,19 @@
   <h1>Probes</h1>
   <p><a href="/admin/probes/new"><button type="button">新建 Probe</button></a></p>
   {{$now := .Pages.now}}
+  <p class="filters">
+    {{$f := .Pages.filter}}
+    <a href="/admin?filter=all"      class="{{if eq $f "all"}}active{{end}}">全部 {{index .Pages.counts "all"}}</a>
+    <a href="/admin?filter=pending"  class="{{if eq $f "pending"}}active{{end}}">待启用 {{index .Pages.counts "pending"}}</a>
+    <a href="/admin?filter=online"   class="{{if eq $f "online"}}active{{end}}">在线 {{index .Pages.counts "online"}}</a>
+    <a href="/admin?filter=offline"  class="{{if eq $f "offline"}}active{{end}}">离线 {{index .Pages.counts "offline"}}</a>
+    <a href="/admin?filter=disabled" class="{{if eq $f "disabled"}}active{{end}}">已禁用 {{index .Pages.counts "disabled"}}</a>
+  </p>
   <table>
     <thead>
       <tr>
         <th>Probe ID</th><th>校区</th><th>楼栋群</th><th>楼栋</th>
-        <th>网络</th><th>状态</th><th>Last Seen</th><th>创建时间</th><th></th>
+        <th>网络</th><th>状态</th><th>Last Seen</th><th>凭证轮换</th><th>创建时间</th><th></th>
       </tr>
     </thead>
     <tbody>
@@ -19,11 +27,13 @@
         <td>{{.Probe.BuildingName}} <span class="muted">({{.Probe.BuildingCode}})</span></td>
         <td>{{.Probe.NetworkType}}</td>
         <td>
-          {{if not .Probe.Enabled}}<span class="badge disabled">Disabled</span>
+          {{if .PendingApproval}}<span class="badge pending">待启用</span>
+          {{else if not .Probe.Enabled}}<span class="badge disabled">Disabled</span>
           {{else if .Online}}<span class="badge online">Online</span>
           {{else}}<span class="badge offline">Offline</span>{{end}}
         </td>
         <td>{{if .LastSeen}}{{formatAge .LastSeen $now}}{{else}}<span class="muted">从未</span>{{end}}</td>
+        <td>{{if .Probe.RotatedAt.IsZero}}<span class="muted">从未轮换</span>{{else}}{{formatTime .Probe.RotatedAt}}{{end}}</td>
         <td>{{formatTime .Probe.CreatedAt}}</td>
         <td class="actions">
           <form method="post" action="/admin/probes/{{.Probe.ProbeID}}/toggle">
@@ -33,7 +43,7 @@
         </td>
       </tr>
     {{else}}
-      <tr><td colspan="9" class="muted">还没有 Probe。点击「新建 Probe」开始。</td></tr>
+      <tr><td colspan="10" class="muted">还没有 Probe。点击「新建 Probe」开始。</td></tr>
     {{end}}
     </tbody>
   </table>

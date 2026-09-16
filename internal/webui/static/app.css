@@ -61,6 +61,10 @@ code, .mono {
 .badge.online { background: #e5f5ec; color: var(--ok); }
 .badge.offline { background: #fdeceb; color: var(--bad); }
 .badge.disabled { background: #f1f3f5; color: var(--muted); }
+.badge.pending { background: #fdf6e3; color: var(--warn); }
+.filters { display: flex; gap: 14px; font-size: 14px; }
+.filters a { color: var(--muted); text-decoration: none; }
+.filters a.active { color: var(--accent); font-weight: 600; }
 .error { color: var(--bad); background: #fdeceb; padding: 10px 12px; border-radius: 6px; }
 .notice { color: var(--warn); background: #fdf6e3; padding: 12px; border-radius: 6px; }
 .token-box {
