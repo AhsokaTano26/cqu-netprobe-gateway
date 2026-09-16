@@ -1,0 +1,690 @@
+# CQU NetProbe Gateway — Alertmanager 配置
+#
+# 按 校区 -> 楼栋群 -> 楼栋 三级划分，每一级各自对应 Uptime Kuma 上的一个
+# Push 监控。告警带哪些 Label 就落到哪一级：
+#
+#   campus only                  -> kuma-<campus>
+#   campus + building_group      -> kuma-<campus>-<group>
+#   campus + building_group + building -> kuma-<campus>-<building>
+#   没有 campus（网关自身告警）   -> kuma-gateway（兜底）
+#
+# 使用前：
+#   1. 把 kuma.example.com 换成你的 Uptime Kuma 地址；
+#   2. 每个 receiver 的 TOKEN-xxx 换成 Kuma 里对应 Push 监控的 token；
+#      TOKEN-xxx 的 xxx 就是这个监控该叫什么，例如 TOKEN-hx-sy01 -> "hx-sy01"；
+#   3. amtool check-config alertmanager.yml 验证一遍再 reload。
+#
+# 本文件由 docs/buildings.md 生成，楼栋列表变动后重新生成，不要手改中间部分。
+
+global:
+  resolve_timeout: 5m
+
+route:
+  # 没有 campus Label 的告警走这里：up{} 抓取失败、网关自身的计数器。
+  receiver: kuma-gateway
+  # 每栋楼各自成组，一个楼出问题不会把别处的告警挤进同一条通知。
+  group_by: ['alertname', 'campus', 'building_group', 'building']
+  group_wait: 30s
+  group_interval: 5m
+  # 告警持续不恢复时的重发间隔。注意：Kuma 的 Push 监控靠这个间隔维持状态，
+  # 把它调得比 Kuma 监控的 Heartbeat Interval 还长，监控会先超时变 DOWN。
+  repeat_interval: 4h
+
+  routes:
+    # ---- A区（spba）----
+    - matchers:
+        - campus="spba"
+      receiver: kuma-spba
+      routes:
+        - matchers:
+            - building_group="a_dorm"
+          receiver: kuma-spba-a_dorm   # A区 / A区学生宿舍
+          routes:
+            - matchers:
+                - building="a01"
+              receiver: kuma-spba-a01   # A区1舍
+            - matchers:
+                - building="a02"
+              receiver: kuma-spba-a02   # A区2舍
+            - matchers:
+                - building="a03"
+              receiver: kuma-spba-a03   # A区3舍
+            - matchers:
+                - building="a04"
+              receiver: kuma-spba-a04   # A区4舍
+            - matchers:
+                - building="a05"
+              receiver: kuma-spba-a05   # A区5舍
+            - matchers:
+                - building="a06"
+              receiver: kuma-spba-a06   # A区6舍
+            - matchers:
+                - building="a07"
+              receiver: kuma-spba-a07   # A区7舍
+            - matchers:
+                - building="a08"
+              receiver: kuma-spba-a08   # A区8舍
+            - matchers:
+                - building="a09"
+              receiver: kuma-spba-a09   # A区9舍
+            - matchers:
+                - building="a10"
+              receiver: kuma-spba-a10   # A区10舍
+            - matchers:
+                - building="a11"
+              receiver: kuma-spba-a11   # A区11舍
+            - matchers:
+                - building="a12"
+              receiver: kuma-spba-a12   # A区12舍
+        - matchers:
+            - building_group="a_acd"
+          receiver: kuma-spba-a_acd   # A区 / A区acd楼
+          routes:
+            - matchers:
+                - building="acd"
+              receiver: kuma-spba-acd   # ACD楼
+        - matchers:
+            - building_group="a_hotel"
+          receiver: kuma-spba-a_hotel   # A区 / A区学林宾馆
+          routes:
+            - matchers:
+                - building="xuelin"
+              receiver: kuma-spba-xuelin   # 学林宾馆
+
+    # ---- B区（spbb）----
+    - matchers:
+        - campus="spbb"
+      receiver: kuma-spbb
+      routes:
+        - matchers:
+            - building_group="b_dorm"
+          receiver: kuma-spbb-b_dorm   # B区 / B区学生宿舍
+          routes:
+            - matchers:
+                - building="b01"
+              receiver: kuma-spbb-b01   # B区1舍
+            - matchers:
+                - building="b02"
+              receiver: kuma-spbb-b02   # B区2舍
+            - matchers:
+                - building="b03"
+              receiver: kuma-spbb-b03   # B区3舍
+            - matchers:
+                - building="b04"
+              receiver: kuma-spbb-b04   # B区4舍
+            - matchers:
+                - building="b05"
+              receiver: kuma-spbb-b05   # B区5舍
+            - matchers:
+                - building="b06"
+              receiver: kuma-spbb-b06   # B区6舍
+            - matchers:
+                - building="b07"
+              receiver: kuma-spbb-b07   # B区7舍
+            - matchers:
+                - building="b08"
+              receiver: kuma-spbb-b08   # B区8舍
+            - matchers:
+                - building="b09"
+              receiver: kuma-spbb-b09   # B区9舍
+            - matchers:
+                - building="b10"
+              receiver: kuma-spbb-b10   # B区10舍
+            - matchers:
+                - building="b11"
+              receiver: kuma-spbb-b11   # B区11舍
+            - matchers:
+                - building="b12"
+              receiver: kuma-spbb-b12   # B区12舍
+        - matchers:
+            - building_group="b_teach"
+          receiver: kuma-spbb-b_teach   # B区 / B区教学楼
+          routes:
+            - matchers:
+                - building="qj"
+              receiver: kuma-spbb-qj   # 青教楼
+
+    # ---- C区（spbc）----
+    - matchers:
+        - campus="spbc"
+      receiver: kuma-spbc
+      routes:
+        - matchers:
+            - building_group="c_dorm"
+          receiver: kuma-spbc-c_dorm   # C区 / C区学生宿舍
+          routes:
+            - matchers:
+                - building="c01"
+              receiver: kuma-spbc-c01   # C区1舍
+            - matchers:
+                - building="c02"
+              receiver: kuma-spbc-c02   # C区2舍
+            - matchers:
+                - building="c03"
+              receiver: kuma-spbc-c03   # C区3舍
+            - matchers:
+                - building="c04"
+              receiver: kuma-spbc-c04   # C区4舍
+            - matchers:
+                - building="c05"
+              receiver: kuma-spbc-c05   # C区5舍
+
+    # ---- 虎溪（hx）----
+    - matchers:
+        - campus="hx"
+      receiver: kuma-hx
+      routes:
+        - matchers:
+            - building_group="jy"
+          receiver: kuma-hx-jy   # 虎溪 / 菊园
+          routes:
+            - matchers:
+                - building="jy01"
+              receiver: kuma-hx-jy01   # 博士生公寓
+        - matchers:
+            - building_group="my"
+          receiver: kuma-hx-my   # 虎溪 / 梅园
+          routes:
+            - matchers:
+                - building="my01"
+              receiver: kuma-hx-my01   # 梅园1栋
+            - matchers:
+                - building="my02"
+              receiver: kuma-hx-my02   # 梅园2栋
+            - matchers:
+                - building="my03"
+              receiver: kuma-hx-my03   # 梅园3栋
+            - matchers:
+                - building="my04"
+              receiver: kuma-hx-my04   # 梅园4栋
+            - matchers:
+                - building="my05"
+              receiver: kuma-hx-my05   # 梅园5栋
+            - matchers:
+                - building="my06"
+              receiver: kuma-hx-my06   # 梅园6栋
+            - matchers:
+                - building="my07"
+              receiver: kuma-hx-my07   # 梅园7栋
+        - matchers:
+            - building_group="sy"
+          receiver: kuma-hx-sy   # 虎溪 / 松园
+          routes:
+            - matchers:
+                - building="sy01"
+              receiver: kuma-hx-sy01   # 松园1栋
+            - matchers:
+                - building="sy02"
+              receiver: kuma-hx-sy02   # 松园2栋
+            - matchers:
+                - building="sy03"
+              receiver: kuma-hx-sy03   # 松园3栋
+            - matchers:
+                - building="sy04"
+              receiver: kuma-hx-sy04   # 松园4栋
+            - matchers:
+                - building="sy05"
+              receiver: kuma-hx-sy05   # 松园5栋
+            - matchers:
+                - building="sy06"
+              receiver: kuma-hx-sy06   # 松园6栋
+        - matchers:
+            - building_group="zy"
+          receiver: kuma-hx-zy   # 虎溪 / 竹园
+          routes:
+            - matchers:
+                - building="zy01"
+              receiver: kuma-hx-zy01   # 竹园1栋
+            - matchers:
+                - building="zy02"
+              receiver: kuma-hx-zy02   # 竹园2栋
+            - matchers:
+                - building="zy03"
+              receiver: kuma-hx-zy03   # 竹园3栋
+            - matchers:
+                - building="zy04"
+              receiver: kuma-hx-zy04   # 竹园4栋
+            - matchers:
+                - building="zy05"
+              receiver: kuma-hx-zy05   # 竹园5栋
+            - matchers:
+                - building="zy06"
+              receiver: kuma-hx-zy06   # 竹园6栋
+        - matchers:
+            - building_group="ly"
+          receiver: kuma-hx-ly   # 虎溪 / 兰园
+          routes:
+            - matchers:
+                - building="ly01"
+              receiver: kuma-hx-ly01   # 兰园1栋
+            - matchers:
+                - building="ly02"
+              receiver: kuma-hx-ly02   # 兰园2栋
+            - matchers:
+                - building="ly03"
+              receiver: kuma-hx-ly03   # 兰园3栋
+            - matchers:
+                - building="ly04"
+              receiver: kuma-hx-ly04   # 兰园4栋
+            - matchers:
+                - building="ly05"
+              receiver: kuma-hx-ly05   # 兰园5栋
+            - matchers:
+                - building="ly06"
+              receiver: kuma-hx-ly06   # 兰园6栋
+            - matchers:
+                - building="ly07"
+              receiver: kuma-hx-ly07   # 兰园7栋
+            - matchers:
+                - building="ly08"
+              receiver: kuma-hx-ly08   # 兰园8栋
+        - matchers:
+            - building_group="hy"
+          receiver: kuma-hx-hy   # 虎溪 / 荷园
+          routes:
+            - matchers:
+                - building="hy01"
+              receiver: kuma-hx-hy01   # 荷园1栋
+            - matchers:
+                - building="hy02"
+              receiver: kuma-hx-hy02   # 荷园2栋
+            - matchers:
+                - building="hy03"
+              receiver: kuma-hx-hy03   # 荷园3栋
+            - matchers:
+                - building="hy04"
+              receiver: kuma-hx-hy04   # 荷园4栋
+            - matchers:
+                - building="hy05"
+              receiver: kuma-hx-hy05   # 荷园5栋
+            - matchers:
+                - building="hy06"
+              receiver: kuma-hx-hy06   # 荷园6栋
+            - matchers:
+                - building="hy07"
+              receiver: kuma-hx-hy07   # 荷园7栋
+            - matchers:
+                - building="hy08"
+              receiver: kuma-hx-hy08   # 荷园8栋
+
+    # ---- 两江（lj）----
+    - matchers:
+        - campus="lj"
+      receiver: kuma-lj
+      routes:
+        - matchers:
+            - building_group="lj_dorm"
+          receiver: kuma-lj-lj_dorm   # 两江 / 两江学生宿舍
+          routes:
+            - matchers:
+                - building="lj01"
+              receiver: kuma-lj-lj01   # 两江1栋
+            - matchers:
+                - building="lj02"
+              receiver: kuma-lj-lj02   # 两江2栋
+
+# 网关抓不到时，下面那些基于指标的告警全是噪声——它们只是抓取失败的后果，
+# 不是新的故障。没有 equal，所以抑制是无条件的。不需要就整段删掉。
+inhibit_rules:
+  - source_matchers: [alertname="NetProbeGatewayDown"]
+    target_matchers: [severity=~"warning|critical"]
+
+receivers:
+  # 兜底：不带 campus Label 的告警
+  - name: kuma-gateway
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-gateway
+        send_resolved: true
+
+  - name: kuma-spba   # A区
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spba
+        send_resolved: true
+  - name: kuma-spba-a_dorm   # A区 / A区学生宿舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spba-a_dorm
+        send_resolved: true
+  - name: kuma-spba-a_acd   # A区 / A区acd楼
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spba-a_acd
+        send_resolved: true
+  - name: kuma-spba-a_hotel   # A区 / A区学林宾馆
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spba-a_hotel
+        send_resolved: true
+  - name: kuma-spba-a01   # A区 / A区1舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spba-a01
+        send_resolved: true
+  - name: kuma-spba-a02   # A区 / A区2舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spba-a02
+        send_resolved: true
+  - name: kuma-spba-a03   # A区 / A区3舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spba-a03
+        send_resolved: true
+  - name: kuma-spba-a04   # A区 / A区4舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spba-a04
+        send_resolved: true
+  - name: kuma-spba-a05   # A区 / A区5舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spba-a05
+        send_resolved: true
+  - name: kuma-spba-a06   # A区 / A区6舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spba-a06
+        send_resolved: true
+  - name: kuma-spba-a07   # A区 / A区7舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spba-a07
+        send_resolved: true
+  - name: kuma-spba-a08   # A区 / A区8舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spba-a08
+        send_resolved: true
+  - name: kuma-spba-a09   # A区 / A区9舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spba-a09
+        send_resolved: true
+  - name: kuma-spba-a10   # A区 / A区10舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spba-a10
+        send_resolved: true
+  - name: kuma-spba-a11   # A区 / A区11舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spba-a11
+        send_resolved: true
+  - name: kuma-spba-a12   # A区 / A区12舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spba-a12
+        send_resolved: true
+  - name: kuma-spba-acd   # A区 / ACD楼
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spba-acd
+        send_resolved: true
+  - name: kuma-spba-xuelin   # A区 / 学林宾馆
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spba-xuelin
+        send_resolved: true
+  - name: kuma-spbb   # B区
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spbb
+        send_resolved: true
+  - name: kuma-spbb-b_dorm   # B区 / B区学生宿舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spbb-b_dorm
+        send_resolved: true
+  - name: kuma-spbb-b_teach   # B区 / B区教学楼
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spbb-b_teach
+        send_resolved: true
+  - name: kuma-spbb-b01   # B区 / B区1舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spbb-b01
+        send_resolved: true
+  - name: kuma-spbb-b02   # B区 / B区2舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spbb-b02
+        send_resolved: true
+  - name: kuma-spbb-b03   # B区 / B区3舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spbb-b03
+        send_resolved: true
+  - name: kuma-spbb-b04   # B区 / B区4舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spbb-b04
+        send_resolved: true
+  - name: kuma-spbb-b05   # B区 / B区5舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spbb-b05
+        send_resolved: true
+  - name: kuma-spbb-b06   # B区 / B区6舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spbb-b06
+        send_resolved: true
+  - name: kuma-spbb-b07   # B区 / B区7舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spbb-b07
+        send_resolved: true
+  - name: kuma-spbb-b08   # B区 / B区8舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spbb-b08
+        send_resolved: true
+  - name: kuma-spbb-b09   # B区 / B区9舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spbb-b09
+        send_resolved: true
+  - name: kuma-spbb-b10   # B区 / B区10舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spbb-b10
+        send_resolved: true
+  - name: kuma-spbb-b11   # B区 / B区11舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spbb-b11
+        send_resolved: true
+  - name: kuma-spbb-b12   # B区 / B区12舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spbb-b12
+        send_resolved: true
+  - name: kuma-spbb-qj   # B区 / 青教楼
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spbb-qj
+        send_resolved: true
+  - name: kuma-spbc   # C区
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spbc
+        send_resolved: true
+  - name: kuma-spbc-c_dorm   # C区 / C区学生宿舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spbc-c_dorm
+        send_resolved: true
+  - name: kuma-spbc-c01   # C区 / C区1舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spbc-c01
+        send_resolved: true
+  - name: kuma-spbc-c02   # C区 / C区2舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spbc-c02
+        send_resolved: true
+  - name: kuma-spbc-c03   # C区 / C区3舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spbc-c03
+        send_resolved: true
+  - name: kuma-spbc-c04   # C区 / C区4舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spbc-c04
+        send_resolved: true
+  - name: kuma-spbc-c05   # C区 / C区5舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-spbc-c05
+        send_resolved: true
+  - name: kuma-hx   # 虎溪
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx
+        send_resolved: true
+  - name: kuma-hx-jy   # 虎溪 / 菊园
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-jy
+        send_resolved: true
+  - name: kuma-hx-my   # 虎溪 / 梅园
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-my
+        send_resolved: true
+  - name: kuma-hx-sy   # 虎溪 / 松园
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-sy
+        send_resolved: true
+  - name: kuma-hx-zy   # 虎溪 / 竹园
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-zy
+        send_resolved: true
+  - name: kuma-hx-ly   # 虎溪 / 兰园
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-ly
+        send_resolved: true
+  - name: kuma-hx-hy   # 虎溪 / 荷园
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-hy
+        send_resolved: true
+  - name: kuma-hx-jy01   # 虎溪 / 博士生公寓
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-jy01
+        send_resolved: true
+  - name: kuma-hx-my01   # 虎溪 / 梅园1栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-my01
+        send_resolved: true
+  - name: kuma-hx-my02   # 虎溪 / 梅园2栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-my02
+        send_resolved: true
+  - name: kuma-hx-my03   # 虎溪 / 梅园3栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-my03
+        send_resolved: true
+  - name: kuma-hx-my04   # 虎溪 / 梅园4栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-my04
+        send_resolved: true
+  - name: kuma-hx-my05   # 虎溪 / 梅园5栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-my05
+        send_resolved: true
+  - name: kuma-hx-my06   # 虎溪 / 梅园6栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-my06
+        send_resolved: true
+  - name: kuma-hx-my07   # 虎溪 / 梅园7栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-my07
+        send_resolved: true
+  - name: kuma-hx-sy01   # 虎溪 / 松园1栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-sy01
+        send_resolved: true
+  - name: kuma-hx-sy02   # 虎溪 / 松园2栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-sy02
+        send_resolved: true
+  - name: kuma-hx-sy03   # 虎溪 / 松园3栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-sy03
+        send_resolved: true
+  - name: kuma-hx-sy04   # 虎溪 / 松园4栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-sy04
+        send_resolved: true
+  - name: kuma-hx-sy05   # 虎溪 / 松园5栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-sy05
+        send_resolved: true
+  - name: kuma-hx-sy06   # 虎溪 / 松园6栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-sy06
+        send_resolved: true
+  - name: kuma-hx-zy01   # 虎溪 / 竹园1栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-zy01
+        send_resolved: true
+  - name: kuma-hx-zy02   # 虎溪 / 竹园2栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-zy02
+        send_resolved: true
+  - name: kuma-hx-zy03   # 虎溪 / 竹园3栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-zy03
+        send_resolved: true
+  - name: kuma-hx-zy04   # 虎溪 / 竹园4栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-zy04
+        send_resolved: true
+  - name: kuma-hx-zy05   # 虎溪 / 竹园5栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-zy05
+        send_resolved: true
+  - name: kuma-hx-zy06   # 虎溪 / 竹园6栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-zy06
+        send_resolved: true
+  - name: kuma-hx-ly01   # 虎溪 / 兰园1栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-ly01
+        send_resolved: true
+  - name: kuma-hx-ly02   # 虎溪 / 兰园2栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-ly02
+        send_resolved: true
+  - name: kuma-hx-ly03   # 虎溪 / 兰园3栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-ly03
+        send_resolved: true
+  - name: kuma-hx-ly04   # 虎溪 / 兰园4栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-ly04
+        send_resolved: true
+  - name: kuma-hx-ly05   # 虎溪 / 兰园5栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-ly05
+        send_resolved: true
+  - name: kuma-hx-ly06   # 虎溪 / 兰园6栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-ly06
+        send_resolved: true
+  - name: kuma-hx-ly07   # 虎溪 / 兰园7栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-ly07
+        send_resolved: true
+  - name: kuma-hx-ly08   # 虎溪 / 兰园8栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-ly08
+        send_resolved: true
+  - name: kuma-hx-hy01   # 虎溪 / 荷园1栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-hy01
+        send_resolved: true
+  - name: kuma-hx-hy02   # 虎溪 / 荷园2栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-hy02
+        send_resolved: true
+  - name: kuma-hx-hy03   # 虎溪 / 荷园3栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-hy03
+        send_resolved: true
+  - name: kuma-hx-hy04   # 虎溪 / 荷园4栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-hy04
+        send_resolved: true
+  - name: kuma-hx-hy05   # 虎溪 / 荷园5栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-hy05
+        send_resolved: true
+  - name: kuma-hx-hy06   # 虎溪 / 荷园6栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-hy06
+        send_resolved: true
+  - name: kuma-hx-hy07   # 虎溪 / 荷园7栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-hy07
+        send_resolved: true
+  - name: kuma-hx-hy08   # 虎溪 / 荷园8栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-hx-hy08
+        send_resolved: true
+  - name: kuma-lj   # 两江
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-lj
+        send_resolved: true
+  - name: kuma-lj-lj_dorm   # 两江 / 两江学生宿舍
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-lj-lj_dorm
+        send_resolved: true
+  - name: kuma-lj-lj01   # 两江 / 两江1栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-lj-lj01
+        send_resolved: true
+  - name: kuma-lj-lj02   # 两江 / 两江2栋
+    webhook_configs:
+      - url: https://kuma.example.com/api/push/TOKEN-lj-lj02
+        send_resolved: true
