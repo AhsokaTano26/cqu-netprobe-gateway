@@ -194,9 +194,16 @@ func (s *Server) handleTokenShow(w http.ResponseWriter, r *http.Request) {
 	webui.Render(w, http.StatusOK, s.templates, "token.html", webui.PageData{
 		Title: "探针 Token",
 		Pages: map[string]any{
-			"ProbeID":      rec.probeID,
-			"Token":        rec.value,
-			"PushEndpoint": strings.TrimSuffix(s.cfg.PublicBaseURL, "/") + "/api/v1/push",
+			"ProbeID": rec.probeID,
+			"Token":   rec.value,
+			// The bare base URL, not the full push path. A probe appends
+			// /api/v1/push itself (Protocol v1 §2), so showing it the whole URL
+			// would have it post to /api/v1/push/api/v1/push.
+			//
+			// The trailing slash is still trimmed: PUBLIC_BASE_URL is commonly
+			// written with one, and it would otherwise end up in the value the
+			// visitor copies and pastes.
+			"PushEndpoint": strings.TrimSuffix(s.cfg.PublicBaseURL, "/"),
 			"Back":         rec.back,
 		},
 	})

@@ -27,6 +27,7 @@
 
   <p class="muted">
     把上表三项配置到探针上，它开始上报后就会出现在监控里——不需要管理员审批。
+    Push Endpoint 只到主机名，路径 <code>/api/v1/push</code> 由探针自己补上。
     探针通过 <code>GET /api/v1/targets</code> 拉取待测目标与测量参数（周期、超时等），
     因此调整监控目标不必重新部署探针。
   </p>

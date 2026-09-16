@@ -132,8 +132,14 @@ func TestRegisterCreatesEnabledProbeAndShowsTokenOnce(t *testing.T) {
 	if token == "" {
 		t.Fatal("no token on the token page")
 	}
-	if !strings.Contains(first.Body.String(), "https://netprobe.example.com/api/v1/push") {
+	if !strings.Contains(first.Body.String(), "https://netprobe.example.com") {
 		t.Error("the push endpoint is not shown")
+	}
+	// The push path must NOT be on the page: a probe appends /api/v1/push
+	// itself (Protocol v1 §2), so showing it the full URL would have it post to
+	// /api/v1/push/api/v1/push.
+	if strings.Contains(first.Body.String(), "netprobe.example.com/api/v1/push") {
+		t.Error("the page shows the full push URL; a probe that appends the path would double it")
 	}
 	if !strings.Contains(first.Body.String(), "不需要管理员审批") {
 		t.Error("the page does not tell the visitor the token works straight away")
@@ -187,7 +193,10 @@ func TestTokenPageOffersClickToCopyAndReturn(t *testing.T) {
 	rows := map[string]string{
 		"v-probe-id": `hx-sy01-[a-z0-9]{6}`,
 		"v-token":    `cqu_probe_[A-Za-z0-9_-]{43}`,
-		"v-endpoint": `https://netprobe\.example\.com/api/v1/push`,
+		// Base URL only. The pattern has to match the element's whole content —
+		// </code> follows it immediately — so a value carrying the push path
+		// would not match here.
+		"v-endpoint": `https://netprobe\.example\.com`,
 	}
 	for id, value := range rows {
 		re := regexp.MustCompile(`(?s)<div class="copy-row">\s*<code id="` + id + `">` +

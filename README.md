@@ -338,8 +338,9 @@ image  →  构建并推送多架构镜像到 Docker Hub              （每次 
 与页面显示完全一致），页脚有「返回」按钮：自助注册回到注册表单，管理员创建回到 Probe
 列表，轮换回到该 Probe 详情页。
 
-把展示页上的 Token 与 Push Endpoint 配置到 Probe 端（Endpoint 形如
-`<PUBLIC_BASE_URL>/api/v1/push`），然后让 Probe 发出第一次上报。
+把展示页上的 Token 与 Push Endpoint 配置到 Probe 端。展示的 Push Endpoint 就是
+`PUBLIC_BASE_URL` 本身（不含路径）——`/api/v1/push` 由 Probe 自己补上（§2），所以那一格
+填的是主机名而不是完整的 URL。然后让 Probe 发出第一次上报。
 
 `/admin` 的 Probe 列表展示每个 Probe 的 Online / Offline / Disabled、Last Seen 与
 身份信息。禁用（toggle）一个 Probe 后，它的 push 会返回 `403 probe_disabled`，且
