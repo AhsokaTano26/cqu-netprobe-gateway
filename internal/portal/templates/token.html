@@ -1,0 +1,20 @@
+{{define "content"}}
+<div class="card narrow">
+  <h1>探针 Token</h1>
+  {{if .Error}}
+    <p class="error">{{.Error}}</p>
+  {{else}}
+  <p class="notice">此 Token 只显示这一次。离开本页后无法再次查看，请立刻保存。</p>
+  <p><strong>Probe ID</strong></p>
+  <div class="token-box">{{.Pages.ProbeID}}</div>
+  <p><strong>Token</strong></p>
+  <div class="token-box">{{.Pages.Token}}</div>
+  <p><strong>Push Endpoint</strong></p>
+  <div class="token-box">{{.Pages.PushEndpoint}}</div>
+  <p class="muted">
+    探针配置好并开始推送后，管理页面会显示为「待启用」。管理员启用之前，
+    Gateway 会返回 <code>403 probe_disabled</code>，也不会产生任何监控指标。
+  </p>
+  {{end}}
+</div>
+{{end}}

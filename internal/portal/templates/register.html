@@ -1,0 +1,44 @@
+{{define "content"}}
+<div class="card narrow">
+  <h1>注册网络探针</h1>
+  <p class="muted">
+    填写探针所在位置，提交后会生成一个 Token。为避免误报数据，新探针需要管理员启用后才会开始接收测量。
+  </p>
+  {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+  {{if .Pages.empty}}
+    <p class="notice">管理员尚未配置任何校区，暂时无法注册。请联系网络中心。</p>
+  {{else}}
+  <form method="post" action="/">
+    <label>校区
+      <select name="campus_code" onchange="location.href='/?campus='+this.value" required>
+        <option value="">请选择校区…</option>
+        {{$sel := .Pages.campus}}
+        {{range .Pages.campuses}}
+          <option value="{{.Code}}" {{if eq .Code $sel}}selected{{end}}>{{.Name}}</option>
+        {{end}}
+      </select>
+    </label>
+    {{if .Pages.campus}}
+    <label>楼栋
+      <select name="building_code" required>
+        <option value="">请选择楼栋…</option>
+        {{range .Pages.buildings}}<option value="{{.Code}}">{{.Name}}</option>{{end}}
+      </select>
+    </label>
+    <label>网络类型
+      <select name="network_type" required>
+        <option value="wired">有线 (wired)</option>
+        <option value="wireless">无线 (wireless)</option>
+      </select>
+    </label>
+    <label>备注（可选，不会进入监控 Label）
+      <textarea name="description" rows="2" placeholder="例如：松园一栋 305 宿舍"></textarea>
+    </label>
+    <button type="submit">生成 Token</button>
+    {{else}}
+    <p class="muted">请先选择校区。</p>
+    {{end}}
+  </form>
+  {{end}}
+</div>
+{{end}}
