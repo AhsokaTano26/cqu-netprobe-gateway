@@ -820,6 +820,41 @@ func TestTargetsShapeAndFiltering(t *testing.T) {
 // TestTargetsSharesTheAuthFailureThrottle pins the reason the endpoint reuses
 // authenticate(): without it, a guessing attacker would move here, where the
 // per-probe push bucket does not apply, and get unlimited attempts.
+// The parameters a probe receives are the ones an administrator saved, not the
+// compiled-in constants. Reading them per request rather than caching at startup
+// is what makes an edit take effect on the next refresh with nothing restarted,
+// and this is the seam where a cache would hide.
+func TestTargetsDispatchTheStoredMeasurementConfig(t *testing.T) {
+	h := newHarness(t)
+
+	custom := protocol.DefaultMeasurementConfig()
+	custom.IntervalMS = 30000
+	custom.ICMP.Count = 10
+	custom.HTTP.FollowRedirects = false
+	custom.DNS.TimeoutMS = 1500
+	if err := h.store.SetMeasurementConfig(custom); err != nil {
+		t.Fatalf("SetMeasurementConfig() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/targets", nil)
+	req.Header.Set("Authorization", "Bearer "+h.tok)
+	rec := httptest.NewRecorder()
+	h.server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Config protocol.MeasurementConfig `json:"config"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if body.Config != custom {
+		t.Errorf("dispatched %+v, want the stored %+v", body.Config, custom)
+	}
+}
+
 func TestTargetsSharesTheAuthFailureThrottle(t *testing.T) {
 	h := newHarness(t)
 	guessed, err := token.Generate()

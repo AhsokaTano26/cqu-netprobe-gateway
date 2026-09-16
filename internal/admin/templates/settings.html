@@ -1,0 +1,73 @@
+{{define "content"}}
+{{$f := .Pages.form}}
+<div class="card">
+  <h1>测量参数</h1>
+  <p class="muted">
+    这些参数通过 <code>GET /api/v1/targets</code> 下发给<strong>所有</strong>探针，探针在下次刷新时生效
+    （建议刷新间隔 5 分钟），不需要重新部署探针，也不需要重启 Gateway。
+  </p>
+  {{if .Pages.custom}}
+    <p class="notice">当前使用的是<strong>自定义值</strong>（保存在数据库里）。</p>
+  {{else}}
+    <p class="notice">当前使用的是<strong>协议默认值</strong>，尚未自定义。</p>
+  {{end}}
+  {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+
+  <form method="post" action="/admin/settings">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+
+    <h2>测量周期</h2>
+    <label>探测周期（毫秒）
+      <input type="number" name="interval_ms" min="1000" step="100" value="{{$f.IntervalMS}}" required>
+    </label>
+
+    <h2>ICMP</h2>
+    <label>每轮次数
+      <input type="number" name="icmp_count" min="1" value="{{$f.ICMPCount}}" required>
+    </label>
+    <label>请求间隔（毫秒）
+      <input type="number" name="icmp_interval_ms" min="1" value="{{$f.ICMPIntervalMS}}" required>
+    </label>
+    <label>单次超时（毫秒）
+      <input type="number" name="icmp_timeout_ms" min="1" value="{{$f.ICMPTimeoutMS}}" required>
+    </label>
+    <p class="muted">
+      整轮最坏耗时 =（次数 − 1）× 间隔 + 单次超时。它必须小于测量周期，否则探针会在上一轮
+      结束前开始下一轮，两轮的丢包被算成一轮——症状是丢包率被低估，而不是报错。
+    </p>
+
+    <h2>HTTP</h2>
+    <label class="check"><input type="checkbox" name="http_follow_redirects" {{if $f.FollowRedirects}}checked{{end}}> 跟随重定向</label>
+    <label class="check"><input type="checkbox" name="http_verify_tls" {{if $f.VerifyTLS}}checked{{end}}> 校验证书</label>
+    <label>整体超时（毫秒，含重定向）
+      <input type="number" name="http_timeout_ms" min="1" value="{{$f.HTTPTimeoutMS}}" required>
+    </label>
+    <p class="muted">
+      请求方法在协议 v1 中固定为 <code>GET</code>，不可修改。关闭证书校验会让这组探针测到的
+      东西与其他探针不可比，请只在校内自签名证书的服务上关闭。
+    </p>
+
+    <h2>DNS</h2>
+    <label>整体超时（毫秒）
+      <input type="number" name="dns_timeout_ms" min="1" value="{{$f.DNSTimeoutMS}}" required>
+    </label>
+    <p class="muted">传输层在协议 v1 中固定为 <code>UDP</code>，不可修改。</p>
+
+    <button type="submit">保存</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>恢复默认值</h2>
+  <p class="muted">
+    删除自定义值，回到协议默认：周期 10 秒、ICMP 每轮 5 次/间隔 200ms/超时 1s、
+    HTTP 5s、DNS 3s。探针同样在下次刷新时生效。
+  </p>
+  <form method="post" action="/admin/settings/reset"
+        data-confirm="确定恢复为协议默认值？所有探针会在下次刷新时改用默认参数。"
+        onsubmit="return confirm('确定恢复为协议默认值？所有探针会在下次刷新时改用默认参数。');">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button type="submit" class="danger">恢复默认值</button>
+  </form>
+</div>
+{{end}}

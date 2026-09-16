@@ -40,6 +40,12 @@ input, select, textarea {
   font: inherit; color: var(--ink); background: #fff;
 }
 input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); border-color: transparent; }
+/* A checkbox is not a text field: the rule above would stretch it across the
+   label and push its caption onto the next line. */
+input[type="checkbox"] {
+  display: inline-block; width: auto; margin: 0 6px 0 0; vertical-align: -1px;
+}
+label.check { color: var(--ink); font-size: 14px; }
 button {
   padding: 8px 16px; border: 0; border-radius: 6px;
   background: var(--accent); color: #fff; font: inherit; cursor: pointer;

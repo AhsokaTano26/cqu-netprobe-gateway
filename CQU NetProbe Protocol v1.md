@@ -1333,7 +1333,9 @@ dns.transport           string    查询使用的传输层，v1 固定 udp
 dns.timeout_ms          integer   查询的整体超时
 ```
 
-v1 固定值：
+**哪些值探针说了不算，也不由协议写死**：除下面标为「v1 固定」的两项外，其余全部由
+Gateway 的管理员在管理页面上设置并随本响应下发。上表之外没有默认值的约定，只有一组
+**出厂默认值**，新部署、或被管理员恢复默认时使用：
 
 ```text
 interval_ms       10000
@@ -1342,31 +1344,50 @@ icmp.count        5
 icmp.interval_ms  200
 icmp.timeout_ms   1000
 
-http.method          GET
+http.method          GET      ← v1 固定，不可修改
 http.follow_redirects  true
 http.verify_tls        true
 http.timeout_ms        5000
 
-dns.transport     udp
+dns.transport     udp        ← v1 固定，不可修改
 dns.timeout_ms    3000
+```
+
+管理员可以修改的值，Gateway 必须校验后才会下发。校验规则（探针可以假定收到的值一定
+满足）：
+
+```text
+interval_ms >= 1000
+
+icmp.count >= 1
+icmp.interval_ms >= 1
+icmp.timeout_ms >= 1
+(icmp.count - 1) * icmp.interval_ms + icmp.timeout_ms < interval_ms
+
+http.timeout_ms >= 1 且 < interval_ms
+dns.timeout_ms  >= 1 且 < interval_ms
 ```
 
 约定：
 
 - **本结构内所有时间一律毫秒**，与 §24 的单位规则一致。字段名带 `_ms` 后缀，因此不存在
-  「秒还是毫秒」的歧义。
+  「秒还是毫秒」的歧义。管理页面同样以毫秒为单位编辑，不做单位换算。
 - 三个测量类型的分组**始终全部存在**。只测 ICMP 的探针忽略 `http` 与 `dns` 两组即可，
   不需要处理字段缺失。
-- 整个 ICMP 轮次的最坏耗时为 `(icmp.count - 1) * icmp.interval_ms + icmp.timeout_ms`。
-  它必须小于 `interval_ms`，否则探针会在上一轮结束前开始下一轮，两轮的丢包会被算成一轮。
-  当前值：`4 * 200 + 1000 = 1800 ms`，小于 `10000 ms`。
+- ICMP 整轮耗时的这条约束存在的原因：不满足时探针会在上一轮结束前开始下一轮，两轮的丢包
+  被算成一轮——症状是丢包率被**低估**，而不是报错。
 - `http.timeout_ms` 与 §19 的 5 秒**不是同一件事**：§19 约束的是探针向 Gateway 上报时的
   HTTP 客户端超时，本字段约束的是探针测量 HTTP Target 时的超时，两者是不同的连接。
 - 数值不由探针决定。探针如果实现了本地覆盖（例如调试用），上报的数据会与同组其他探针
   不可比，应避免。
+- `http.method` 与 `dns.transport` 属于 v1 ABI：它们决定测量结果的语义，改变它们会让
+  同一 Dashboard 上的数据不可比。因此它们在 v1 中固定，不由管理页面提供。
 
 参数**不区分 Target**：Gateway 不为单个 Target 定义不同的超时或周期。需要区别对待时，
 应当在探针的测量类型上区分，而不是在协议里增加每 Target 参数。
+
+参数变更**不需要探针做任何事**：探针按 §32.7 的节奏重新拉取，拿到新值后在下一轮测量中
+生效。Gateway 不推送通知，也不要求探针重启。
 
 ## 32.5 列表内容规则
 

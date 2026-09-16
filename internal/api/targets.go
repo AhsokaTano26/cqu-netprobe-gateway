@@ -52,12 +52,20 @@ func (s *Server) handleTargets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The list is recomputed per request rather than cached: it is one indexed
-	// read, and a cache would have to be invalidated by the admin UI, which owns
-	// the table. The measurement config is a constant.
+	// Both reads happen per request rather than being cached: each is one
+	// indexed lookup, and a cache would have to be invalidated by the admin UI,
+	// which is the only writer. An edit therefore reaches probes on their next
+	// refresh, with nothing to restart.
 	targets, err := s.store.DispatchTargets()
 	if err != nil {
 		s.logger.Error("failed to list dispatch targets", "error", err)
+		s.reject(protocol.CodeInternalError, probe.ProbeID)
+		writeError(w, http.StatusServiceUnavailable, protocol.CodeServiceUnavailable, msgUnavailable)
+		return
+	}
+	config, custom, err := s.store.MeasurementConfig()
+	if err != nil {
+		s.logger.Error("failed to read measurement config", "error", err)
 		s.reject(protocol.CodeInternalError, probe.ProbeID)
 		writeError(w, http.StatusServiceUnavailable, protocol.CodeServiceUnavailable, msgUnavailable)
 		return
@@ -79,9 +87,10 @@ func (s *Server) handleTargets(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(targetsResponse{
 		Version: targetsVersion,
-		Config:  protocol.DefaultMeasurementConfig(),
+		Config:  config,
 		Targets: entries,
 	})
 
-	s.logger.Debug("served target list", "probe_id", probe.ProbeID, "targets", len(entries))
+	s.logger.Debug("served target list", "probe_id", probe.ProbeID,
+		"targets", len(entries), "custom_config", custom)
 }

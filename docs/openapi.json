@@ -437,7 +437,7 @@
           "http": { "$ref": "#/components/schemas/HTTPConfig" },
           "dns": { "$ref": "#/components/schemas/DNSConfig" }
         },
-        "description": "所有 Target 共用的测量参数（§32.4）。Gateway 不对单个 Target 定义不同的超时或周期。\n\n三个测量类型的分组**始终全部存在**：只测 ICMP 的探针忽略另外两组即可，不需要处理字段缺失。\n\n本结构内所有时间一律为毫秒，与 §24 的单位规则一致——字段名带 `_ms` 后缀，因此不存在「秒还是毫秒」的歧义。"
+        "description": "所有 Target 共用的测量参数（§32.4）。Gateway 不对单个 Target 定义不同的超时或周期。\n\n除 `http.method` 与 `dns.transport`（协议 v1 固定值）外，其余字段都由管理员在 Gateway 的管理页面上设置并随本响应下发。本文件里 `example` 中的数值是**出厂默认值**：新部署、或被管理员恢复默认时使用，不代表某个部署当前的配置。\n\n三个测量类型的分组**始终全部存在**：只测 ICMP 的探针忽略另外两组即可，不需要处理字段缺失。\n\n本结构内所有时间一律为毫秒，与 §24 的单位规则一致——字段名带 `_ms` 后缀，因此不存在「秒还是毫秒」的歧义。"
       },
       "ICMPConfig": {
         "type": "object",

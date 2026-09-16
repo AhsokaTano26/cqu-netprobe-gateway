@@ -1,16 +1,23 @@
 package protocol
 
+import (
+	"errors"
+	"fmt"
+)
+
 // Measurement parameters dispatched with the target list (Protocol v1 §32.4).
 //
-// These are constants, not settings: every probe measures every target the same
-// way, so they are neither per-target nor per-probe, and there is no page that
-// edits them. They are dispatched anyway rather than compiled into each probe,
-// for the reason §32 exists at all — the alternative is two repositories that
-// must be changed together and two binaries that can drift apart.
+// These are the defaults. Every probe measures every target the same way, so
+// the parameters are neither per-target nor per-probe, but they are not fixed
+// either: an administrator edits them at /admin/settings and the stored set
+// replaces these on every probe's next refresh. They are dispatched rather than
+// compiled into each probe for the reason §32 exists at all — the alternative is
+// two repositories that must be changed together and two binaries that drift.
 //
-// Changing a value here changes what every probe does on its next refresh. The
-// same numbers appear in docs/openapi.json and in the protocol document, and
-// internal/api's spec test fails if they disagree.
+// Changing a constant here changes what a probe does only until an
+// administrator saves their own set; it also changes what a fresh deployment
+// starts with. The same numbers appear in docs/openapi.json and in the protocol
+// document, and internal/api's spec test fails if the three disagree.
 const (
 	// IntervalMS is the measurement cycle: the time between the starts of two
 	// consecutive rounds (§18), which is also the push cadence. It must stay
@@ -85,6 +92,74 @@ type DNSConfig struct {
 	Transport string `json:"transport"`
 	// TimeoutMS is the overall timeout for the query.
 	TimeoutMS int `json:"timeout_ms"`
+}
+
+// MinIntervalMS is the shortest measurement cycle the protocol accepts. It is a
+// sanity floor, not the real constraint: whether a cycle is fast enough to be
+// throttled depends on the deployment's push rate limit, which this package
+// cannot see. The admin form enforces that one.
+const MinIntervalMS = 1000
+
+// ICMPRoundMS is the worst-case duration of one ICMP round: the gaps between
+// the echo requests, plus the last request's timeout. Note it is not
+// Count*IntervalMS — the final request is sent at (Count-1)*IntervalMS and then
+// waits TimeoutMS for its reply.
+func (c MeasurementConfig) ICMPRoundMS() int {
+	if c.ICMP.Count <= 0 {
+		return 0
+	}
+	return (c.ICMP.Count-1)*c.ICMP.IntervalMS + c.ICMP.TimeoutMS
+}
+
+// Validate rejects parameters that would make probes misbehave. It is the single
+// gate for administrator-supplied values: these numbers reach every probe on its
+// next refresh, so a bad set takes the whole fleet with it at once.
+//
+// The messages are written in Chinese because the admin form renders them
+// verbatim, next to the field that was rejected. Elsewhere in this package the
+// errors are English and never shown to a person.
+func (c MeasurementConfig) Validate() error {
+	if c.IntervalMS < MinIntervalMS {
+		return fmt.Errorf("测量周期必须不小于 %d 毫秒", MinIntervalMS)
+	}
+
+	switch {
+	case c.ICMP.Count <= 0:
+		return errors.New("ICMP 每轮次数必须大于 0")
+	case c.ICMP.IntervalMS <= 0:
+		return errors.New("ICMP 请求间隔必须大于 0")
+	case c.ICMP.TimeoutMS <= 0:
+		return errors.New("ICMP 单次超时必须大于 0")
+	}
+	// A round that outlives the cycle makes the probe start the next one before
+	// the previous finished, and two rounds' worth of timeouts get reported as
+	// one. The symptom is under-reported loss, not an error.
+	if round := c.ICMPRoundMS(); round >= c.IntervalMS {
+		return fmt.Errorf("ICMP 整轮最坏耗时 %d 毫秒（%d 次 × %d 毫秒间隔 + %d 毫秒超时）必须小于测量周期 %d 毫秒",
+			round, c.ICMP.Count, c.ICMP.IntervalMS, c.ICMP.TimeoutMS, c.IntervalMS)
+	}
+
+	// v1 fixes these two. They are part of the measurement's meaning, not
+	// knobs: a probe that followed redirects, or queried over TCP, would
+	// produce numbers that cannot be compared with the rest of the fleet.
+	if c.HTTP.Method != HTTPMethod {
+		return fmt.Errorf("HTTP 方法在协议 v1 中固定为 %s", HTTPMethod)
+	}
+	if c.DNS.Transport != DNSTransport {
+		return fmt.Errorf("DNS 传输层在协议 v1 中固定为 %s", DNSTransport)
+	}
+
+	switch {
+	case c.HTTP.TimeoutMS <= 0:
+		return errors.New("HTTP 超时必须大于 0")
+	case c.HTTP.TimeoutMS >= c.IntervalMS:
+		return fmt.Errorf("HTTP 超时 %d 毫秒必须小于测量周期 %d 毫秒", c.HTTP.TimeoutMS, c.IntervalMS)
+	case c.DNS.TimeoutMS <= 0:
+		return errors.New("DNS 超时必须大于 0")
+	case c.DNS.TimeoutMS >= c.IntervalMS:
+		return fmt.Errorf("DNS 超时 %d 毫秒必须小于测量周期 %d 毫秒", c.DNS.TimeoutMS, c.IntervalMS)
+	}
+	return nil
 }
 
 // DefaultMeasurementConfig returns the v1 measurement parameters.

@@ -24,6 +24,7 @@ var adminPages = []string{
 	"targets.html",
 	"campuses.html",
 	"buildings.html",
+	"settings.html",
 }
 
 // pageFS holds this package's page files. An embed pattern keeps the directory
@@ -234,6 +235,11 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.Handle("POST /admin/buildings/new", s.requireSession(s.requireCSRF(http.HandlerFunc(s.handleBuildingCreate))))
 	mux.Handle("POST /admin/buildings/{code}/update", s.requireSession(s.requireCSRF(http.HandlerFunc(s.handleBuildingUpdate))))
 	mux.Handle("POST /admin/buildings/{code}/delete", s.requireSession(s.requireCSRF(http.HandlerFunc(s.handleBuildingDelete))))
+
+	// Measurement parameters dispatched to every probe.
+	mux.Handle("GET /admin/settings", s.requireSession(http.HandlerFunc(s.handleMeasurementSettings)))
+	mux.Handle("POST /admin/settings", s.requireSession(s.requireCSRF(http.HandlerFunc(s.handleMeasurementSettingsSave))))
+	mux.Handle("POST /admin/settings/reset", s.requireSession(s.requireCSRF(http.HandlerFunc(s.handleMeasurementSettingsReset))))
 
 	return mux
 }
