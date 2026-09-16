@@ -5,16 +5,31 @@
     <p class="error">{{.Error}}</p>
   {{else}}
   <p class="notice">此 Token 只显示这一次。离开本页后无法再次查看，请立刻保存。</p>
-  <p><strong>Probe ID</strong></p>
-  <div class="token-box">{{.Pages.ProbeID}}</div>
-  <p><strong>Token</strong></p>
-  <div class="token-box">{{.Pages.Token}}</div>
-  <p><strong>Push Endpoint</strong></p>
-  <div class="token-box">{{.Pages.PushEndpoint}}</div>
+  <p class="muted">点击任意一行即可复制。</p>
+
+  <h2>Probe ID</h2>
+  <button type="button" class="copy-field" data-copy="#v-probe-id" aria-live="polite">
+    <code id="v-probe-id">{{.Pages.ProbeID}}</code>
+    <span class="copy-hint">复制</span>
+  </button>
+
+  <h2>Token</h2>
+  <button type="button" class="copy-field" data-copy="#v-token" aria-live="polite">
+    <code id="v-token">{{.Pages.Token}}</code>
+    <span class="copy-hint">复制</span>
+  </button>
+
+  <h2>Push Endpoint</h2>
+  <button type="button" class="copy-field" data-copy="#v-endpoint" aria-live="polite">
+    <code id="v-endpoint">{{.Pages.PushEndpoint}}</code>
+    <span class="copy-hint">复制</span>
+  </button>
+
   <p class="muted">
     探针配置好并开始推送后，管理页面会显示为「待启用」。管理员启用之前，
     Gateway 会返回 <code>403 probe_disabled</code>，也不会产生任何监控指标。
   </p>
   {{end}}
+  <p><a class="btn secondary" href="{{.Pages.Back}}">← 返回</a></p>
 </div>
 {{end}}

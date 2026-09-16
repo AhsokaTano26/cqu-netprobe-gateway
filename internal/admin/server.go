@@ -59,8 +59,11 @@ type Limiter interface {
 // create and rotate redirect to the portal's public /token/{slot}, so a slot held
 // in admin's memory would be a URL that page could never redeem. One store, one
 // page, one URL — and the 60 second TTL lives with the page that enforces it.
+//
+// back is where the token page's return button leads. The operator never sees the
+// public registration form, so create and rotate send them back into the admin UI.
 type OneShot interface {
-	MintTokenSlot(probeID, token string) (string, error)
+	MintTokenSlot(probeID, token, back string) (string, error)
 }
 
 // Deps are the admin server's collaborators.

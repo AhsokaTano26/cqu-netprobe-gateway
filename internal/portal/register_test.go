@@ -161,6 +161,82 @@ func TestRegisterCreatesDisabledProbeAndShowsTokenOnce(t *testing.T) {
 	}
 }
 
+// TestTokenPageOffersClickToCopyAndReturn covers the two things a visitor does
+// with this page: retype three values into a config file, and leave.
+func TestTokenPageOffersClickToCopyAndReturn(t *testing.T) {
+	h := newHarness(t)
+	rec := h.do(t, http.MethodPost, "/", url.Values{
+		"campus_code": {"hx"}, "building_code": {"sy01"}, "network_type": {"wired"},
+	}, "10.1.2.7:5555")
+	page := h.do(t, http.MethodGet, rec.Header().Get("Location"), nil, "")
+	if page.Code != http.StatusOK {
+		t.Fatalf("token page status = %d, want 200", page.Code)
+	}
+	body := page.Body.String()
+
+	for _, id := range []string{"v-probe-id", "v-token", "v-endpoint"} {
+		if !strings.Contains(body, `data-copy="#`+id+`"`) {
+			t.Errorf("no click-to-copy button targets #%s", id)
+		}
+	}
+	// Each button copies the text of the element it names, so the bytes copied
+	// are exactly the bytes on screen. That only holds if the value really is
+	// inside that element.
+	if !regexp.MustCompile(`id="v-token">cqu_probe_[A-Za-z0-9_-]{43}<`).MatchString(body) {
+		t.Error("the token is not inside the element its copy button targets")
+	}
+	if !regexp.MustCompile(`id="v-endpoint">https://netprobe\.example\.com/api/v1/push<`).MatchString(body) {
+		t.Error("the push endpoint is not inside the element its copy button targets")
+	}
+	if !strings.Contains(body, `<a class="btn secondary" href="/">`) {
+		t.Error("the token page does not offer a return to the registration form")
+	}
+	// The values stay readable and selectable without scripting, so a browser
+	// that blocks the handler degrades to plain text rather than to nothing.
+	if !strings.Contains(body, `src="/static/app.js"`) {
+		t.Error("the layout does not load the copy handler")
+	}
+}
+
+// TestTokenPageReturnsWhereTheMinterSaid keeps the admin flows out of the public
+// registration form — an operator who just created a probe belongs in /admin —
+// and pins the guard that stops a return path from pointing off-site.
+func TestTokenPageReturnsWhereTheMinterSaid(t *testing.T) {
+	h := newHarness(t)
+	cases := map[string]string{
+		"/admin":                       "/admin",
+		"/admin/probes/hx-sy01-aaaaaa": "/admin/probes/hx-sy01-aaaaaa",
+		"//evil.example":               "/",
+		`/\evil.example`:               "/",
+		"https://evil.example":         "/",
+	}
+	for back, want := range cases {
+		t.Run(back, func(t *testing.T) {
+			slot, err := h.server.MintTokenSlot("hx-sy01-aaaaaa", "cqu_probe_secret", back)
+			if err != nil {
+				t.Fatalf("MintTokenSlot() error = %v", err)
+			}
+			body := h.do(t, http.MethodGet, "/token/"+slot, nil, "").Body.String()
+			// The whole anchor, not just the href: the topbar nav also links to
+			// /admin, so a bare href check could pass with the button missing.
+			if !strings.Contains(body, `<a class="btn secondary" href="`+want+`">`) {
+				t.Errorf("return link is not %q", want)
+			}
+			if strings.Contains(body, "evil.example") {
+				t.Error("an off-site return path reached the page")
+			}
+		})
+	}
+}
+
+func TestTokenPageExpiredStillOffersAWayBack(t *testing.T) {
+	h := newHarness(t)
+	body := h.do(t, http.MethodGet, "/token/not-a-real-slot", nil, "").Body.String()
+	if !strings.Contains(body, `<a class="btn secondary" href="/">`) {
+		t.Error("the expired page is a dead end")
+	}
+}
+
 func TestRegisterRejectsUnknownOrMismatchedLocation(t *testing.T) {
 	h := newHarness(t)
 	if err := h.store.CreateCampus(&store.Campus{Code: "aq", Name: "A区"}); err != nil {

@@ -77,15 +77,21 @@ func NewServer(d Deps) (*Server, error) {
 }
 
 // MintTokenSlot stores a plaintext token in the one-shot display store and
-// returns the slot that redeems it.
+// returns the slot that redeems it. back is the path the token page's return
+// button leads to, so the admin flows can send the operator back to the probe
+// list instead of to the public registration form.
 //
 // This package owns that store because it owns the page that redeems it: the
 // admin UI calls this so its create and rotate flows redirect to the single
 // public /token/{slot} instead of minting into a store of its own, which the
 // page could never read. The slot carries the probe ID server-side, so a crafted
 // URL cannot put another ID beside a real token.
-func (s *Server) MintTokenSlot(probeID, token string) (string, error) {
-	return s.oneShot.putPair(probeID, token)
+//
+// back is stored, never read from the request. A caller-supplied return path
+// would be an open redirect; one that arrives through this method is chosen by
+// this program.
+func (s *Server) MintTokenSlot(probeID, token, back string) (string, error) {
+	return s.oneShot.putPair(probeID, token, back)
 }
 
 // Routes returns the public mux.

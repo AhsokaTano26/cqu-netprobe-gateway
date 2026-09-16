@@ -15,7 +15,7 @@ func TestOneShotTokenTakeOnce(t *testing.T) {
 	now := time.Unix(1789490000, 0).UTC()
 	o := newOneShotStore(60*time.Second, func() time.Time { return now })
 
-	slot, err := o.putPair("hx-sy01-aaaaaa", "cqu_probe_secret")
+	slot, err := o.putPair("hx-sy01-aaaaaa", "cqu_probe_secret", "/")
 	if err != nil {
 		t.Fatalf("putPair() error = %v", err)
 	}
@@ -23,16 +23,39 @@ func TestOneShotTokenTakeOnce(t *testing.T) {
 		t.Errorf("slot id is only %d chars", len(slot))
 	}
 
-	probeID, got, ok := o.takePair(slot)
-	if !ok || got != "cqu_probe_secret" {
-		t.Fatalf("takePair() = %q, %q, %v; want the token, true", probeID, got, ok)
+	rec, ok := o.takePair(slot)
+	if !ok || rec.value != "cqu_probe_secret" {
+		t.Fatalf("takePair() = %+v, %v; want the token, true", rec, ok)
 	}
-	if probeID != "hx-sy01-aaaaaa" {
-		t.Errorf("takePair() probeID = %q, want the ID the slot was minted with", probeID)
+	if rec.probeID != "hx-sy01-aaaaaa" {
+		t.Errorf("takePair() probeID = %q, want the ID the slot was minted with", rec.probeID)
 	}
 	// A second take must fail: this is what makes the token show-once.
-	if _, _, ok := o.takePair(slot); ok {
+	if _, ok := o.takePair(slot); ok {
 		t.Fatal("takePair() succeeded twice; the token must be shown only once")
+	}
+}
+
+// TestSafeBackPathRejectsOffSiteTargets pins the open-redirect guard. "/\evil"
+// matters because browsers normalise the backslash to a slash, turning what
+// looks like a local path into a scheme-relative URL to another host.
+func TestSafeBackPathRejectsOffSiteTargets(t *testing.T) {
+	cases := map[string]string{
+		"/":                         "/",
+		"/admin":                    "/admin",
+		"/admin/probes/hx-sy01-aaa": "/admin/probes/hx-sy01-aaa",
+		"/admin/":                   "/admin/",
+		"":                          "/",
+		"//evil.example":            "/",
+		"/\\evil.example":           "/",
+		"https://evil.example":      "/",
+		"javascript:alert(1)":       "/",
+		"admin":                     "/",
+	}
+	for in, want := range cases {
+		if got := safeBackPath(in); got != want {
+			t.Errorf("safeBackPath(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 
@@ -44,7 +67,7 @@ func TestOneShotTokenTakeIsAtomic(t *testing.T) {
 	now := time.Unix(1789490000, 0).UTC()
 	o := newOneShotStore(60*time.Second, func() time.Time { return now })
 
-	slot, err := o.putPair("hx-sy01-aaaaaa", "cqu_probe_secret")
+	slot, err := o.putPair("hx-sy01-aaaaaa", "cqu_probe_secret", "/")
 	if err != nil {
 		t.Fatalf("putPair() error = %v", err)
 	}
@@ -60,7 +83,7 @@ func TestOneShotTokenTakeIsAtomic(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			<-start // maximize overlap
-			if _, v, ok := o.takePair(slot); ok && v == "cqu_probe_secret" {
+			if rec, ok := o.takePair(slot); ok && rec.value == "cqu_probe_secret" {
 				mu.Lock()
 				winners++
 				mu.Unlock()
@@ -80,9 +103,9 @@ func TestOneShotTokenExpires(t *testing.T) {
 	current := now
 	o := newOneShotStore(60*time.Second, func() time.Time { return current })
 
-	slot, _ := o.putPair("hx-sy01-aaaaaa", "cqu_probe_secret")
+	slot, _ := o.putPair("hx-sy01-aaaaaa", "cqu_probe_secret", "/")
 	current = now.Add(61 * time.Second)
-	if _, _, ok := o.takePair(slot); ok {
+	if _, ok := o.takePair(slot); ok {
 		t.Fatal("an expired slot was still redeemable")
 	}
 }

@@ -247,6 +247,10 @@ Gateway **不做 TLS 终结**，也不做 HTTP 跳转。生产环境必须在它
 - 因此**忘记 Token 只能轮换，不能找回**：在 `/admin/probes/{id}` 上点「轮换 Token」，
   旧 Token 立即失效，新 Token 同样只显示一次。
 
+展示页上的 Probe ID、Token 与 Push Endpoint 都是**点击即复制**的（整行可点，复制内容
+与页面显示完全一致），页脚有「返回」按钮：自助注册回到注册表单，管理员创建回到 Probe
+列表，轮换回到该 Probe 详情页。
+
 把展示页上的 Token 与 Push Endpoint 配置到 Probe 端（Endpoint 形如
 `<PUBLIC_BASE_URL>/api/v1/push`），然后让 Probe 发出第一次上报。
 

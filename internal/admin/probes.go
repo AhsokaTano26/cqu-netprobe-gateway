@@ -306,7 +306,7 @@ func (s *Server) handleProbeCreate(w http.ResponseWriter, r *http.Request) {
 	// of the portal's public one-shot page. That page is the only implementation:
 	// the slot carries the probe ID server-side, so no query parameter can
 	// relabel a real token.
-	slot, err := s.oneShot.MintTokenSlot(probe.ProbeID, rawToken)
+	slot, err := s.oneShot.MintTokenSlot(probe.ProbeID, rawToken, "/admin")
 	if err != nil {
 		s.logger.Error("failed to store one-shot token", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -396,7 +396,9 @@ func (s *Server) handleProbeRotate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slot, err := s.oneShot.MintTokenSlot(id, rawToken)
+	// A rotation is almost always followed by pasting the new token into one
+	// machine, so return the operator to that probe rather than the whole list.
+	slot, err := s.oneShot.MintTokenSlot(id, rawToken, "/admin/probes/"+id)
 	if err != nil {
 		s.logger.Error("failed to store one-shot token", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)

@@ -83,6 +83,19 @@ func TestStaticHandlerServesCSS(t *testing.T) {
 	}
 }
 
+// The token page's copy buttons are inert without this file, and an embed
+// pattern that missed it would fail at request time rather than at build time.
+func TestStaticHandlerServesCopyScript(t *testing.T) {
+	rec := httptest.NewRecorder()
+	StaticHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/static/app.js", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if !contains(rec.Body.String(), "data-copy") {
+		t.Error("served file does not look like the copy handler")
+	}
+}
+
 func TestFormatTimeRendersZeroAsDash(t *testing.T) {
 	if got := FormatTime(time.Time{}); got != "—" {
 		t.Errorf("FormatTime(zero) = %q, want —", got)

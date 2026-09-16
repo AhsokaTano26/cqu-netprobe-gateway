@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"regexp"
 	"sync"
 	"time"
 )
@@ -29,9 +30,12 @@ type oneShotStore struct {
 	now   func() time.Time
 }
 
+// oneShot is one displayable token: the plaintext value, the probe it belongs
+// to, and where the page showing it should offer to go back to.
 type oneShot struct {
 	probeID string
 	value   string
+	back    string
 	expires time.Time
 }
 
@@ -39,8 +43,9 @@ func newOneShotStore(ttl time.Duration, now func() time.Time) *oneShotStore {
 	return &oneShotStore{slots: make(map[string]oneShot), ttl: ttl, now: now}
 }
 
-// putPair stores a token together with the probe it belongs to.
-func (o *oneShotStore) putPair(probeID, value string) (string, error) {
+// putPair stores a token together with the probe it belongs to. back is the
+// page the token page returns to; see safeBackPath.
+func (o *oneShotStore) putPair(probeID, value, back string) (string, error) {
 	slot, err := randomString(32)
 	if err != nil {
 		return "", err
@@ -54,25 +59,49 @@ func (o *oneShotStore) putPair(probeID, value string) (string, error) {
 			delete(o.slots, k)
 		}
 	}
-	o.slots[slot] = oneShot{probeID: probeID, value: value, expires: now.Add(o.ttl)}
+	o.slots[slot] = oneShot{
+		probeID: probeID,
+		value:   value,
+		back:    safeBackPath(back),
+		expires: now.Add(o.ttl),
+	}
 	return slot, nil
 }
 
 // takePair redeems a slot, deleting it in the same critical section so two
 // concurrent requests cannot both receive the token.
-func (o *oneShotStore) takePair(slot string) (probeID, value string, ok bool) {
+func (o *oneShotStore) takePair(slot string) (oneShot, bool) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 
 	v, found := o.slots[slot]
 	if !found {
-		return "", "", false
+		return oneShot{}, false
 	}
 	delete(o.slots, slot)
 	if o.now().After(v.expires) {
-		return "", "", false
+		return oneShot{}, false
 	}
-	return v.probeID, v.value, true
+	return v, true
+}
+
+// backPathPattern matches a plain absolute path with no empty segment, which is
+// what rules out "//host" and any backslash.
+var backPathPattern = regexp.MustCompile(`^/(?:[A-Za-z0-9._~-]+/)*[A-Za-z0-9._~-]*$`)
+
+// safeBackPath keeps a return path safe to put in an href.
+//
+// Both callers are server-side today and pass constants, but this value lands in
+// a link on a public page, and getting it wrong is an open redirect: browsers
+// read "//evil.example" and "/\evil.example" as scheme-relative URLs pointing at
+// another host. Anything that is not a plain path on this site degrades to the
+// registration page rather than failing the mint — the token is the point, and
+// losing it over a bad return link would be the worse outcome.
+func safeBackPath(path string) string {
+	if backPathPattern.MatchString(path) {
+		return path
+	}
+	return "/"
 }
 
 func randomString(n int) (string, error) {

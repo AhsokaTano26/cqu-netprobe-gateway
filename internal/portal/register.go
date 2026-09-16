@@ -135,7 +135,9 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	slot, err := s.oneShot.putPair(probe.ProbeID, rawToken)
+	// A self-registered visitor came from the form, so the token page returns
+	// there — ready to register a second probe for the same room.
+	slot, err := s.oneShot.putPair(probe.ProbeID, rawToken, "/")
 	if err != nil {
 		s.logger.Error("failed to store one-shot token", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -150,21 +152,24 @@ func (s *Server) handleRegister(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleTokenShow(w http.ResponseWriter, r *http.Request) {
 	slot := r.PathValue("slot")
-	probeID, rawToken, ok := s.oneShot.takePair(slot)
+	rec, ok := s.oneShot.takePair(slot)
 	if !ok {
+		// The return target is a constant here: the record is gone, so there is
+		// nothing left that knows where this visitor came from.
 		webui.Render(w, http.StatusGone, s.templates, "token.html", webui.PageData{
 			Title: "Token 已失效",
 			Error: "该 Token 已显示过或已过期，无法再次查看。如需新凭据，请重新注册或联系管理员轮换。",
-			Pages: map[string]any{},
+			Pages: map[string]any{"Back": "/"},
 		})
 		return
 	}
 	webui.Render(w, http.StatusOK, s.templates, "token.html", webui.PageData{
 		Title: "探针 Token",
 		Pages: map[string]any{
-			"ProbeID":      probeID,
-			"Token":        rawToken,
+			"ProbeID":      rec.probeID,
+			"Token":        rec.value,
 			"PushEndpoint": strings.TrimSuffix(s.cfg.PublicBaseURL, "/") + "/api/v1/push",
+			"Back":         rec.back,
 		},
 	})
 }
