@@ -96,8 +96,8 @@ docker compose up -d
 docker compose logs -f gateway
 ```
 
-镜像默认使用 `ghcr.io/tano/cqu-netprobe-gateway:${IMAGE_TAG:-latest}`，也可以就地构建
-（`docker compose build`），或在本地直接运行二进制：
+镜像从 Docker Hub 拉取：`${IMAGE_REPO:-tano/cqu-netprobe-gateway}:${IMAGE_TAG:-latest}`。
+也可以就地构建（`docker compose build`），或在本地直接运行二进制：
 
 ```bash
 go build -o gateway ./cmd/gateway
@@ -153,6 +153,32 @@ Gateway **不做 TLS 终结**，也不做 HTTP 跳转。生产环境必须在它
 - 创建 Probe 后展示的 Push Endpoint 会是错的；
 - 管理界面的 Session Cookie 不会带上 `Secure` 标志。
 
+### 5.7 发布镜像（维护者）
+
+镜像发布到 **Docker Hub**，由 `.github/workflows/release.yml` 在推送 tag 时执行：
+
+```bash
+git tag v0.2.0
+git push origin v0.2.0
+```
+
+一次 tag 会推送四个 tag —— `v0.2.0`、`0.2.0`、`0.2`、`latest` —— 并同时构建
+`linux/amd64` 与 `linux/arm64`。
+
+需要在仓库的 **Settings → Secrets and variables → Actions** 里配置两个 secret：
+
+| Secret | 值 |
+|---|---|
+| `DOCKERHUB_USERNAME` | Docker Hub 用户名（小写），也是镜像的命名空间 |
+| `DOCKERHUB_TOKEN` | Docker Hub **Access Token**（Account Settings → Personal access tokens），权限选 Read & Write。**不是账号密码** |
+
+若你的 Docker Hub 账号不允许自动建仓库，先手动建一个 `cqu-netprobe-gateway`。
+workflow 里镜像名写死为 `<DOCKERHUB_USERNAME>/cqu-netprobe-gateway`；fork 后改了仓库名
+的话，改 `release.yml` 里 `metadata-action` 的那一行。
+
+CI（`.github/workflows/ci.yml`）在每次 push 与 PR 上跑 gofmt / vet / `test -race` /
+build，与发布互相独立——发布**不会**等 CI 通过，打 tag 前请确认 main 是绿的。
+
 ## 6. 环境变量
 
 以下变量由 `config.Load` 读取（启动时校验，非法值直接拒绝启动而非静默回退）：
@@ -180,6 +206,7 @@ Gateway **不做 TLS 终结**，也不做 HTTP 跳转。生产环境必须在它
 |---|---|---|
 | `LISTEN_HOST_PORT` | `8080` | 公开 listener 发布到宿主机的端口 |
 | `PUID` / `PGID` | `65532` / `65532` | 容器进程的 uid:gid。原生 Linux 上见 5.3 |
+| `IMAGE_REPO` | `tano/cqu-netprobe-gateway` | 镜像仓库，换镜像源或 fork 时覆盖 |
 | `IMAGE_TAG` | `latest` | 镜像 tag，也作为构建时的 `VERSION` |
 
 > **`ONLINE_THRESHOLD` 警告：** Protocol v1 §26 把在线判定固定为 `age <= 30s`，

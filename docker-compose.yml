@@ -1,6 +1,8 @@
 services:
   gateway:
-    image: ghcr.io/tano/cqu-netprobe-gateway:${IMAGE_TAG:-latest}
+    # Docker Hub. IMAGE_REPO is overridable in .env for a fork or a mirror;
+    # the default is the published image.
+    image: ${IMAGE_REPO:-tano/cqu-netprobe-gateway}:${IMAGE_TAG:-latest}
     build:
       context: .
       args:
