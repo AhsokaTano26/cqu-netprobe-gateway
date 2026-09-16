@@ -1,0 +1,80 @@
+{{define "content"}}
+<div class="card">
+  <h1>楼栋</h1>
+  <p class="muted">
+    楼栋代号进 Prometheus 的 <code>building</code> Label 并进入 <code>probe_id</code>，创建后不可修改。
+    楼栋群（如「松园」）进 <code>building_group</code> Label——请从已有分组中选择，手打新值会产生无法合并的 Series。
+  </p>
+  {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+  <table>
+    <thead><tr><th>校区</th><th>代号</th><th>显示名</th><th>楼栋群</th><th>操作</th></tr></thead>
+    <tbody>
+    {{$csrf := .CSRF}}
+    {{range .Pages.rows}}
+      <tr>
+        <td>{{.CampusName}} <span class="muted">({{.Building.CampusCode}})</span></td>
+        <td><code>{{.Building.Code}}</code></td>
+        <td>
+          <form method="post" action="/admin/buildings/{{.Building.Code}}/update" class="inline">
+            <input type="hidden" name="csrf" value="{{$csrf}}">
+            <input type="hidden" name="code" value="{{.Building.Code}}">
+            <input type="hidden" name="campus_code" value="{{.Building.CampusCode}}">
+            <input type="text" name="name" value="{{.Building.Name}}" required>
+            <input type="text" name="building_group_code" value="{{.Building.BuildingGroupCode}}"
+                   list="group-codes" required size="6">
+            <input type="text" name="building_group_name" value="{{.Building.BuildingGroupName}}"
+                   list="group-names" required size="8">
+            <button type="submit">保存</button>
+          </form>
+        </td>
+        <td><code>{{.Building.BuildingGroupCode}}</code> {{.Building.BuildingGroupName}}</td>
+        <td class="actions">
+          <form method="post" action="/admin/buildings/{{.Building.Code}}/delete"
+                onsubmit="return confirm('确定删除楼栋 {{.Building.Code}}？');">
+            <input type="hidden" name="csrf" value="{{$csrf}}">
+            <button type="submit" class="danger">删除</button>
+          </form>
+        </td>
+      </tr>
+    {{else}}
+      <tr><td colspan="5" class="muted">还没有楼栋。先在下方新增。</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+
+  <datalist id="group-codes">
+    {{range .Pages.groups}}<option value="{{.Code}}">{{.Name}}</option>{{end}}
+  </datalist>
+  <datalist id="group-names">
+    {{range .Pages.groups}}<option value="{{.Name}}">{{.Code}}</option>{{end}}
+  </datalist>
+</div>
+
+<div class="card">
+  <h2>新增楼栋</h2>
+  <form method="post" action="/admin/buildings/new">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label>校区
+      <select name="campus_code" required>
+        {{$sel := .Pages.selectedCampus}}
+        {{range .Pages.campuses}}
+          <option value="{{.Code}}" {{if eq .Code $sel}}selected{{end}}>{{.Name}} ({{.Code}})</option>
+        {{end}}
+      </select>
+    </label>
+    <label>楼栋代号（≤16 位小写字母/数字/下划线，进 Label，创建后不可改）
+      <input type="text" name="code" placeholder="sy01" required>
+    </label>
+    <label>显示名
+      <input type="text" name="name" placeholder="松园一栋" required>
+    </label>
+    <label>楼栋群代号（进 Label；从已有值中选，或新建）
+      <input type="text" name="building_group_code" list="group-codes" placeholder="sy" required>
+    </label>
+    <label>楼栋群显示名
+      <input type="text" name="building_group_name" list="group-names" placeholder="松园" required>
+    </label>
+    <button type="submit">新增</button>
+  </form>
+</div>
+{{end}}
