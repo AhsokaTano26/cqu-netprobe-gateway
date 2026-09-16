@@ -39,6 +39,7 @@ main { max-width: 1080px; margin: 32px auto; padding: 0 24px; }
   max-width: 1080px; margin: 0 auto 40px; padding: 20px 24px 0;
   border-top: 1px solid var(--line);
   color: var(--muted); font-size: 13px;
+  text-align: center;
 }
 .footer p { margin: 0 0 4px; }
 .footer a { color: var(--muted); }
