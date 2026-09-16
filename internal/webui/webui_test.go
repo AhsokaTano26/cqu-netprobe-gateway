@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -177,6 +178,34 @@ func TestEverySelectIsWrappedForTheCustomDropdown(t *testing.T) {
 	}
 	if selects == 0 {
 		t.Error("no <select> was found at all, so this test verified nothing")
+	}
+}
+
+// The footer's year must not be a literal. A copyright line that still says
+// 2026 in 2027 is the kind of thing nobody notices and everybody sees.
+func TestFooterYearFollowsTheClock(t *testing.T) {
+	tmpl, err := Parse(fakePageFS(), "hello.html")
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	Render(rec, http.StatusOK, tmpl, "hello.html", PageData{Title: "hi"})
+	body := rec.Body.String()
+
+	if want := strconv.Itoa(time.Now().Year()); !contains(body, "© "+want+" Lanunion") {
+		t.Errorf("the footer does not carry the current year:\n%s", body)
+	}
+	if !contains(body, "public@lanunion.org.cn") {
+		t.Error("the footer does not carry the contact address")
+	}
+
+	// An explicit year wins, which is what makes the assertion above evidence
+	// that the field is being filled rather than a coincidence of the clock.
+	rec = httptest.NewRecorder()
+	Render(rec, http.StatusOK, tmpl, "hello.html", PageData{Title: "hi", Year: 1999})
+	if !contains(rec.Body.String(), "© 1999 Lanunion") {
+		t.Error("an explicit Year was ignored")
 	}
 }
 

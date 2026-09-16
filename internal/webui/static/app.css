@@ -33,6 +33,16 @@ body {
 .topbar a { color: var(--ink); text-decoration: none; }
 .topbar a:hover { color: var(--accent); }
 main { max-width: 1080px; margin: 32px auto; padding: 0 24px; }
+/* Aligned with main so the footer sits under the content rather than the
+   viewport, and muted so it never competes with the page. */
+.footer {
+  max-width: 1080px; margin: 0 auto 40px; padding: 20px 24px 0;
+  border-top: 1px solid var(--line);
+  color: var(--muted); font-size: 13px;
+}
+.footer p { margin: 0 0 4px; }
+.footer a { color: var(--muted); }
+.footer a:hover { color: var(--accent); }
 .card {
   background: var(--panel); border: 1px solid var(--line);
   border-radius: 10px; padding: 24px; margin-bottom: 24px;

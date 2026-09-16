@@ -25,6 +25,10 @@ type PageData struct {
 	CSRF     string
 	Error    string
 	Pages    map[string]any
+	// Year is the copyright year in the footer. Render fills it with the
+	// current one when it is zero, so nobody has to bump a literal every
+	// January; a page sets it only to pin the value, which is what a test does.
+	Year int
 }
 
 // Templates maps a page file name to a parsed template set with the layout applied.
@@ -100,6 +104,11 @@ func Render(w http.ResponseWriter, status int, t Templates, page string, data Pa
 	if !ok {
 		http.Error(w, "template not found", http.StatusInternalServerError)
 		return
+	}
+	if data.Year == 0 {
+		// Filled here rather than by each caller: Render is the one funnel every
+		// page goes through, so this cannot be forgotten on a new page.
+		data.Year = time.Now().Year()
 	}
 	var buf bytes.Buffer
 	if err := tmpl.ExecuteTemplate(&buf, "layout.html", data); err != nil {
