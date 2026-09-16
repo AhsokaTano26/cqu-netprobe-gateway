@@ -29,7 +29,11 @@ func TestRegisterLimiterIsPerIP(t *testing.T) {
 
 func TestRegisterLimiterMapIsBounded(t *testing.T) {
 	l := NewRegisterLimiter(time.Hour, 1)
-	for i := 0; i < maxTrackedRegisterIPs*2; i++ {
+	// Fill to the cap and then push a few past it. Deliberately not a large
+	// multiple: every insert past the cap scans the full map looking for an
+	// eviction candidate, so 2x the cap is O(n^2) and costs a minute under
+	// -race. Ten inserts past the cap proves boundedness just as well.
+	for i := 0; i < maxTrackedRegisterIPs+10; i++ {
 		l.Allow(ipForIndex(i))
 	}
 	l.mu.Lock()
