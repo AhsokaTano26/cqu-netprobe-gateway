@@ -185,11 +185,19 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (*store.Pr
 	//
 	// The deliberate consequence is that once an IP has crossed the budget the
 	// peek rejects ALL of that address's requests, including well-formed ones.
-	// That is what §10.2 literally specifies (该 IP 的请求快速返回 401), and it is
-	// only reachable once something behind that address has been guessing.
+	// That is what §10.2 specifies (该 IP 的请求快速返回 429), and it is only
+	// reachable once something behind that address has been guessing.
+	//
+	// The status is 429, not 401, even though the underlying cause is failed
+	// authentication. §16 defines 401 as "Token 缺失、格式错误或无效", and this
+	// response is none of those: a request carrying a perfectly valid token gets
+	// it too, because the address itself is blocked. Answering 401 would tell a
+	// probe its credential is bad — the exact harm the 503-instead-of-401 split
+	// below exists to avoid, and it would make an operator rotate a healthy
+	// token. 429 says what is actually true: back off and retry next cycle.
 	if s.limiter != nil && s.limiter.AuthFailureBlocked(ClientIP(r)) {
-		s.authFailed("rate_limited")
-		writeError(w, http.StatusUnauthorized, protocol.CodeUnauthorized, msgUnauthorized)
+		s.reject(protocol.CodeRateLimited, "")
+		writeError(w, http.StatusTooManyRequests, protocol.CodeRateLimited, msgRateLimited)
 		return nil, false
 	}
 
@@ -205,11 +213,22 @@ func (s *Server) authenticate(w http.ResponseWriter, r *http.Request) (*store.Pr
 		// request can only be known to be a failure once its token has failed to
 		// resolve, and charging the IP's budget up front would throttle traffic
 		// that authenticates perfectly well.
-		reason := "invalid_token"
+		// Charge the address's failure budget. An exhausted budget answers 429
+		// for the same reason the peek above does — the credential may well be
+		// fine, it is the address that is out of allowance — so both checks
+		// report the same status for the same condition. The ordinary case (a
+		// bad token, budget still available) is a genuine credential failure and
+		// stays 401.
 		if s.limiter != nil && !s.limiter.AllowAuthFailure(ClientIP(r)) {
-			reason = "rate_limited"
+			// The credential was evaluated and is bad, so this counts as an auth
+			// failure; the *response* is a throttle, so it counts as a rejected
+			// push too. Two counters for two different questions.
+			s.authFailed("invalid_token")
+			s.reject(protocol.CodeRateLimited, "")
+			writeError(w, http.StatusTooManyRequests, protocol.CodeRateLimited, msgRateLimited)
+			return nil, false
 		}
-		s.authFailed(reason)
+		s.authFailed("invalid_token")
 		writeError(w, http.StatusUnauthorized, protocol.CodeUnauthorized, msgUnauthorized)
 		return nil, false
 	}

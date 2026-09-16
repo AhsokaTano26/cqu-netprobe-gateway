@@ -411,12 +411,18 @@ func TestPushAuthFailureThrottlePinsBudget(t *testing.T) {
 		t.Fatalf("token.Generate() error = %v", err)
 	}
 
-	// authFailureBurst guesses are charged; the next one is past the budget.
-	for i := 1; i <= authFailureBurst+1; i++ {
+	// Guesses inside the budget are ordinary 401 credential failures.
+	for i := 1; i <= authFailureBurst; i++ {
 		rec := h.do(t, http.MethodPost, goodBody, "application/json", "Bearer "+guessed)
 		if rec.Code != http.StatusUnauthorized {
 			t.Fatalf("guess %d status = %d, want 401; body = %s", i, rec.Code, rec.Body.String())
 		}
+	}
+	// The guess that exhausts the budget is answered 429, not 401: the address
+	// is out of allowance, which is not the same as a malformed credential.
+	rec := h.do(t, http.MethodPost, goodBody, "application/json", "Bearer "+guessed)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("guess past the budget: status = %d, want 429; body = %s", rec.Code, rec.Body.String())
 	}
 
 	// Guesses inside the budget are ordinary invalid tokens; only the one past
@@ -424,14 +430,16 @@ func TestPushAuthFailureThrottlePinsBudget(t *testing.T) {
 	if got := testutil.ToFloat64(h.self.AuthFailed.WithLabelValues("invalid_token")); got != authFailureBurst {
 		t.Errorf("auth_failed_total{reason=invalid_token} = %v, want %d", got, authFailureBurst)
 	}
-	if got := testutil.ToFloat64(h.self.AuthFailed.WithLabelValues("rate_limited")); got != 1 {
-		t.Errorf("auth_failed_total{reason=rate_limited} = %v, want 1", got)
+	// The 429 is a rate-limit rejection, so it lands in push_rejected_total
+	// alongside the per-probe bucket's 429s, not in the auth-failure counter.
+	if got := testutil.ToFloat64(h.self.PushRejected.WithLabelValues("rate_limited")); got != 1 {
+		t.Errorf("push_rejected_total{reason=rate_limited} = %v, want 1", got)
 	}
 
 	// §10.2's core promise: the failure budget is per-IP and is never charged by
 	// traffic that authenticates. An address with a clean history is unaffected
 	// by another address's guessing and is accepted.
-	rec := h.doFrom(t, "192.0.2.7", http.MethodPost, goodBody, "application/json", h.bearer())
+	rec = h.doFrom(t, "192.0.2.7", http.MethodPost, goodBody, "application/json", h.bearer())
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("valid token from a clean IP: status = %d, want 204; body = %s", rec.Code, rec.Body.String())
 	}
@@ -470,20 +478,28 @@ func TestPushBlockedIPFailsFastBeforeLookup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("token.Generate() error = %v", err)
 	}
-	for i := 1; i <= authFailureBurst+1; i++ {
+	// Guesses inside the budget are ordinary 401 credential failures.
+	for i := 1; i <= authFailureBurst; i++ {
 		if rec := h.do(t, http.MethodPost, goodBody, "application/json", "Bearer "+guessed); rec.Code != http.StatusUnauthorized {
 			t.Fatalf("guess %d status = %d, want 401", i, rec.Code)
 		}
 	}
+	// The guess that exhausts the budget flips the address to rate-limited.
+	if rec := h.do(t, http.MethodPost, goodBody, "application/json", "Bearer "+guessed); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("guess past the budget: status = %d, want 429", rec.Code)
+	}
 	_ = h.store.Close()
 
-	// The blocked address is turned away fast even with a valid token.
+	// The blocked address is turned away fast even with a VALID token. The
+	// status is 429, not 401: the request authenticates fine, the address is
+	// what is blocked. Answering 401 would tell a probe its good credential is
+	// bad and make an operator rotate a healthy token.
 	rec := h.do(t, http.MethodPost, goodBody, "application/json", h.bearer())
-	if rec.Code != http.StatusUnauthorized {
-		t.Fatalf("blocked IP: status = %d, want 401; body = %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("blocked IP: status = %d, want 429; body = %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "unauthorized") {
-		t.Errorf("body = %s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "rate_limited") {
+		t.Errorf("body = %s, want the rate_limited code", rec.Body.String())
 	}
 
 	// A different address still reaches the store, so the block is scoped to
