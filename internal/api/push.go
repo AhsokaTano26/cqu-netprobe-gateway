@@ -88,6 +88,15 @@ func (s *Server) Routes() *http.ServeMux {
 	}
 	mux.Handle("/api/v1/push", notAllowed)
 
+	// The target list a probe measures from. Additive to the push contract: a
+	// probe that never calls it behaves exactly as before it existed.
+	var targets http.Handler = http.HandlerFunc(s.handleTargets)
+	if s.self != nil {
+		targets = RouteMetrics(s.self, targets)
+	}
+	mux.Handle("GET /api/v1/targets", targets)
+	mux.Handle("/api/v1/targets", notAllowed)
+
 	return mux
 }
 

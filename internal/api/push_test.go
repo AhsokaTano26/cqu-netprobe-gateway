@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -668,5 +669,179 @@ func TestPushReturns503WhenStoreUnavailable(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "service_unavailable") {
 		t.Errorf("body = %s", rec.Body.String())
+	}
+}
+
+func TestTargetsRequiresAuth(t *testing.T) {
+	h := newHarness(t)
+
+	get := func(bearer string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/targets", nil)
+		if bearer != "" {
+			req.Header.Set("Authorization", bearer)
+		}
+		rec := httptest.NewRecorder()
+		h.server.Routes().ServeHTTP(rec, req)
+		return rec
+	}
+
+	if rec := get(""); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("no token: status = %d, want 401", rec.Code)
+	}
+	for _, malformed := range []string{h.tok, "Basic " + h.tok, "Bearer "} {
+		if rec := get(malformed); rec.Code != http.StatusUnauthorized {
+			t.Errorf("Authorization %q: status = %d, want 401", malformed, rec.Code)
+		}
+	}
+	other, _ := token.Generate()
+	if rec := get("Bearer " + other); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("unknown token: status = %d, want 401", rec.Code)
+	}
+}
+
+func TestTargetsRejectsDisabledProbe(t *testing.T) {
+	h := newHarness(t)
+	if err := h.store.SetProbeEnabled("hx-sy01-a83f21", false); err != nil {
+		t.Fatalf("SetProbeEnabled() error = %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/targets", nil)
+	req.Header.Set("Authorization", "Bearer "+h.tok)
+	rec := httptest.NewRecorder()
+	h.server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "probe_disabled") {
+		t.Errorf("body = %s", rec.Body.String())
+	}
+}
+
+func TestTargetsWrongMethod(t *testing.T) {
+	h := newHarness(t)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/targets", strings.NewReader("{}"))
+	req.Header.Set("Authorization", "Bearer "+h.tok)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	h.server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "invalid_request") {
+		t.Errorf("405 must use the JSON envelope, got %s", rec.Body.String())
+	}
+}
+
+// TestTargetsShapeAndFiltering checks the whole contract in one place: the
+// response shape, that probe types are grouped and sorted, and — most
+// importantly — that a target without an address is withheld. An addressless
+// target dispatched to a probe would make every probe fail on every cycle
+// against something the operator has not filled in yet.
+func TestTargetsShapeAndFiltering(t *testing.T) {
+	h := newHarness(t)
+
+	// The harness's seeded set: campus_dns has no address, cqu_mirror does.
+	// Add one more of each kind to be sure the filtering is not accidental.
+	if err := h.store.CreateTarget(&store.Target{
+		TargetID: "with_addr", Address: "192.0.2.1", Enabled: true,
+		ProbeTypes: []string{"http", "icmp"},
+	}); err != nil {
+		t.Fatalf("CreateTarget(with_addr) error = %v", err)
+	}
+	if err := h.store.CreateTarget(&store.Target{
+		TargetID: "no_addr", Address: "   ", Enabled: true, ProbeTypes: []string{"icmp"},
+	}); err != nil {
+		t.Fatalf("CreateTarget(no_addr) error = %v", err)
+	}
+	if err := h.store.CreateTarget(&store.Target{
+		TargetID: "off", Address: "192.0.2.2", Enabled: false, ProbeTypes: []string{"icmp"},
+	}); err != nil {
+		t.Fatalf("CreateTarget(off) error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/targets", nil)
+	req.Header.Set("Authorization", "Bearer "+h.tok)
+	rec := httptest.NewRecorder()
+	h.server.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+		t.Errorf("Content-Type = %q", ct)
+	}
+
+	var got struct {
+		Version int `json:"version"`
+		Targets []struct {
+			TargetID   string   `json:"target_id"`
+			Address    string   `json:"address"`
+			ProbeTypes []string `json:"probe_types"`
+		} `json:"targets"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("response is not valid JSON: %v\n%s", err, rec.Body.String())
+	}
+	if got.Version != 1 {
+		t.Errorf("version = %d, want 1", got.Version)
+	}
+
+	byID := map[string][]string{}
+	for _, e := range got.Targets {
+		byID[e.TargetID] = e.ProbeTypes
+		if e.Address == "" {
+			t.Errorf("target %s was dispatched with an empty address", e.TargetID)
+		}
+	}
+
+	if _, ok := byID["campus_dns"]; ok {
+		t.Error("campus_dns has no address and must not be dispatched")
+	}
+	if _, ok := byID["no_addr"]; ok {
+		t.Error("a whitespace-only address must not be dispatched")
+	}
+	if _, ok := byID["off"]; ok {
+		t.Error("a disabled target must not be dispatched")
+	}
+	if types, ok := byID["cqu_mirror"]; !ok || len(types) != 1 || types[0] != "http" {
+		t.Errorf("cqu_mirror = %v, want [http]", types)
+	}
+	if types, ok := byID["with_addr"]; !ok || len(types) != 2 || types[0] != "http" || types[1] != "icmp" {
+		t.Errorf("with_addr = %v, want [http icmp] sorted", types)
+	}
+
+	// The body must not leak page-only fields.
+	if strings.Contains(rec.Body.String(), "display_name") || strings.Contains(rec.Body.String(), "description") {
+		t.Errorf("the response carries page-only fields: %s", rec.Body.String())
+	}
+}
+
+// TestTargetsSharesTheAuthFailureThrottle pins the reason the endpoint reuses
+// authenticate(): without it, a guessing attacker would move here, where the
+// per-probe push bucket does not apply, and get unlimited attempts.
+func TestTargetsSharesTheAuthFailureThrottle(t *testing.T) {
+	h := newHarness(t)
+	guessed, err := token.Generate()
+	if err != nil {
+		t.Fatalf("token.Generate() error = %v", err)
+	}
+
+	get := func(bearer string) int {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/targets", nil)
+		req.Header.Set("Authorization", "Bearer "+bearer)
+		rec := httptest.NewRecorder()
+		h.server.Routes().ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	for i := 1; i <= authFailureBurst; i++ {
+		if got := get(guessed); got != http.StatusUnauthorized {
+			t.Fatalf("guess %d = %d, want 401", i, got)
+		}
+	}
+	// The budget is spent, so even the correct token is turned away now.
+	if got := get(h.tok); got != http.StatusTooManyRequests {
+		t.Fatalf("after the budget: %d, want 429", got)
 	}
 }

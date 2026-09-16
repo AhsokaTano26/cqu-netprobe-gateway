@@ -254,6 +254,38 @@ Gateway **不做 TLS 终结**，也不做 HTTP 跳转。生产环境必须在它
 身份信息。禁用（toggle）一个 Probe 后，它的 push 会返回 `403 probe_disabled`，且
 `/metrics` 上不再暴露它的任何 Series——禁用是管理员的刻意决定，与「掉线」不是一回事。
 
+### 7.4 探针获取 Target 列表
+
+`GET /api/v1/targets`（需要与 push 相同的 `Authorization: Bearer <TOKEN>`）：
+
+```bash
+curl -H "Authorization: Bearer cqu_probe_xxx" https://netprobe.example.com/api/v1/targets
+```
+
+```json
+{
+  "version": 1,
+  "targets": [
+    {"target_id": "aliyun_dns", "address": "223.5.5.5", "probe_types": ["icmp"]},
+    {"target_id": "cqu_mirror", "address": "https://mirrors.cqu.edu.cn/", "probe_types": ["http"]}
+  ]
+}
+```
+
+`address` 的含义由 `probe_types` 决定：`icmp` 是要 ping 的 IP/域名，`dns` 是要查询的 DNS
+服务器地址，`http` 是完整 URL。
+
+**不下发的 Target：** 已禁用的、地址为空的、以及没有任何允许探测类型的。因此 `address`
+是运行数据而不是备注——**地址没填的 Target 探针根本看不到**，管理页面上会以红色标出。
+
+响应按 `target_id` 稳定排序，探针可以直接 diff 两次响应来决定是否重建测量计划。响应里
+**不含**显示名与备注，探针不应依赖它们。
+
+该端点复用 push 的认证与认证失败限流；探针侧建议启动拉取一次、之后每 5 分钟刷新，刷新
+失败时沿用上一份列表继续工作（不要阻塞测量循环）。
+
+> 这是协议的**增量**补充（协议 §32）：不调用它的探针行为完全不变，因此协议版本仍是 `1`。
+
 ## 8. Prometheus scrape 配置
 
 Prometheus 与 Gateway 同机时，直接抓本机回环即可：

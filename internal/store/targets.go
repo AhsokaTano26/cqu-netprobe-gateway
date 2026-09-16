@@ -222,3 +222,57 @@ func ProbeTypesSorted(types []string) []string {
 	sort.Strings(out)
 	return out
 }
+
+// DispatchTarget is a target a probe can be asked to measure. It carries only
+// what the probe needs to act: the ID it must report the result under, the
+// address it dials, and which measurement types are permitted for it.
+type DispatchTarget struct {
+	TargetID   string
+	Address    string
+	ProbeTypes []string
+}
+
+// DispatchTargets returns the targets probes should measure: enabled ones that
+// have an address, with at least one permitted probe type.
+//
+// Addresses became operational when the target list became probe-visible — the
+// probe dials what it is given — so a target with no address is withheld rather
+// than dispatched. Sending one would make every probe fail on every cycle
+// against something the operator simply has not filled in yet, which presents
+// as a monitoring outage instead of a configuration gap.
+func (s *Store) DispatchTargets() ([]DispatchTarget, error) {
+	rows, err := s.db.Query(`
+		SELECT t.target_id, t.address, p.probe_type
+		FROM targets t
+		JOIN target_probe_types p ON p.target_id = t.target_id
+		WHERE t.enabled = 1 AND TRIM(t.address) <> ''
+		ORDER BY t.target_id, p.probe_type`)
+	if err != nil {
+		return nil, fmt.Errorf("store: list dispatch targets: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	// The join yields one row per (target, probe type); fold them back into one
+	// entry per target. ORDER BY makes both the target and the type order stable,
+	// so the response is byte-identical between calls and a probe can diff it.
+	out := []DispatchTarget{}
+	for rows.Next() {
+		var targetID, address, probeType string
+		if err := rows.Scan(&targetID, &address, &probeType); err != nil {
+			return nil, fmt.Errorf("store: scan dispatch target: %w", err)
+		}
+		if n := len(out); n > 0 && out[n-1].TargetID == targetID {
+			out[n-1].ProbeTypes = append(out[n-1].ProbeTypes, probeType)
+			continue
+		}
+		out = append(out, DispatchTarget{
+			TargetID:   targetID,
+			Address:    address,
+			ProbeTypes: []string{probeType},
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: iterate dispatch targets: %w", err)
+	}
+	return out, nil
+}

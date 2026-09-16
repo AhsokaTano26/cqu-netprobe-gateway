@@ -294,3 +294,61 @@ func TestSettingsRoundTrip(t *testing.T) {
 		t.Error("setting still present after delete")
 	}
 }
+
+func TestDispatchTargetsOmitsUnmeasurableTargets(t *testing.T) {
+	s := newTestStore(t)
+
+	// The seeded set already contains campus_dns (address empty) and four with
+	// addresses. Add a whitespace-only address and a disabled target so both
+	// filters are exercised by more than the seed's accident.
+	if err := s.CreateTarget(&Target{TargetID: "blank", Address: "   ", Enabled: true,
+		ProbeTypes: []string{"icmp"}}); err != nil {
+		t.Fatalf("CreateTarget(blank) error = %v", err)
+	}
+	if err := s.CreateTarget(&Target{TargetID: "off", Address: "192.0.2.9", Enabled: false,
+		ProbeTypes: []string{"icmp"}}); err != nil {
+		t.Fatalf("CreateTarget(off) error = %v", err)
+	}
+	if err := s.CreateTarget(&Target{TargetID: "multi", Address: "192.0.2.10", Enabled: true,
+		ProbeTypes: []string{"http", "icmp"}}); err != nil {
+		t.Fatalf("CreateTarget(multi) error = %v", err)
+	}
+
+	got, err := s.DispatchTargets()
+	if err != nil {
+		t.Fatalf("DispatchTargets() error = %v", err)
+	}
+	byID := map[string][]string{}
+	for _, dt := range got {
+		byID[dt.TargetID] = dt.ProbeTypes
+		if dt.Address == "" {
+			t.Errorf("target %s dispatched with an empty address", dt.TargetID)
+		}
+	}
+
+	for _, gone := range []string{"campus_dns", "blank", "off"} {
+		if _, ok := byID[gone]; ok {
+			t.Errorf("%s must not be dispatched", gone)
+		}
+	}
+	if types := byID["multi"]; len(types) != 2 || types[0] != "http" || types[1] != "icmp" {
+		t.Errorf("multi = %v, want [http icmp] in sorted order", types)
+	}
+	if types := byID["cqu_mirror"]; len(types) != 1 || types[0] != "http" {
+		t.Errorf("cqu_mirror = %v, want [http]", types)
+	}
+
+	// The order is stable, so a probe can diff successive responses.
+	again, err := s.DispatchTargets()
+	if err != nil {
+		t.Fatalf("second DispatchTargets() error = %v", err)
+	}
+	if len(again) != len(got) {
+		t.Fatalf("length changed between calls: %d then %d", len(got), len(again))
+	}
+	for i := range got {
+		if got[i].TargetID != again[i].TargetID {
+			t.Fatalf("order changed at %d: %s then %s", i, got[i].TargetID, again[i].TargetID)
+		}
+	}
+}

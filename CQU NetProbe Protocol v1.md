@@ -40,6 +40,9 @@ Probe 不直接与 Prometheus 通信。
 POST /api/v1/push
 ```
 
+本协议另外定义了 `GET /api/v1/targets`，供探针获取可测量的 Target 列表。它是
+**增量**的：不调用它的探针行为完全不变，因此不构成协议版本变更。详见 §32。
+
 生产环境必须使用 HTTPS。
 
 示例：
@@ -1223,3 +1226,117 @@ invalid_probe_type
 Authorization 格式
 
 JSON 字段名称
+---
+
+# 32. Target 列表下发（`GET /api/v1/targets`）
+
+> 本章为增量补充。不调用该端点的探针行为与本章加入前完全一致，因此协议版本仍为 `1`。
+
+## 32.1 目的
+
+Target 由双方代码共同定义（§12）。本章之前，探针必须把 Target 列表编译进自己的代码；
+新增或调整 Target 意味着同时改两个仓库并重新部署探针。
+
+本章让探针在运行时向 Gateway 拉取这份列表，从而只需在 Gateway 管理页面增删 Target。
+
+Gateway 仍然是 Allowlist 的唯一权威：探针拿到什么就只能测什么，未在列表中的 Target 依旧
+返回 `400 invalid_target`。**探针不得自行产生列表之外的 Target ID。**
+
+## 32.2 请求
+
+```http
+GET /api/v1/targets HTTP/1.1
+Host: netprobe.example.com
+Authorization: Bearer <TOKEN>
+User-Agent: cqu-netprobe/<VERSION>
+```
+
+认证方式与 §3 完全一致：同一个 Probe Token，同一套 `Authorization: Bearer <TOKEN>` 格式。
+
+## 32.3 响应
+
+成功固定返回：
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+```
+
+```json
+{
+  "version": 1,
+  "targets": [
+    {
+      "target_id": "aliyun_dns",
+      "address": "223.5.5.5",
+      "probe_types": ["icmp"]
+    },
+    {
+      "target_id": "cqu_mirror",
+      "address": "https://mirrors.cqu.edu.cn/",
+      "probe_types": ["http"]
+    }
+  ]
+}
+```
+
+字段：
+
+```text
+version        integer   本响应结构的版本，当前固定 1
+targets        array     可测量的 Target 列表，按 target_id 升序
+
+target_id      string    上报时 results 的 Key（§6）
+address        string    探针实际拨测的目标
+probe_types    array     该 Target 允许的测量类型，升序，取值 icmp | dns | http
+```
+
+`address` 的含义由 `probe_types` 决定：
+
+```text
+icmp   要 ping 的 IP 或域名
+dns    要查询的 DNS 服务器地址
+http   完整 URL
+```
+
+响应中**不包含**显示名与备注：它们只用于管理页面，不参与测量，探针不应依赖。
+
+## 32.4 列表内容规则
+
+Gateway **不下发**以下 Target：
+
+```text
+enabled = 0              已禁用的 Target（§13：行为等同未知 Target）
+address 为空或全为空白    无法拨测，下发只会让每一轮测量都失败
+probe_types 为空          没有任何允许的测量类型
+```
+
+因此 `address` 是**运行数据**，不再是文档字段：地址未填写的 Target 不会出现在列表中。
+探针实现必须能处理列表为空的情况（此时不上报任何 measurement）。
+
+## 32.5 错误
+
+沿用 §15 的统一错误结构，状态码沿用 §16：
+
+```text
+401  Token 缺失、格式错误或无效
+403  Probe 已被禁用
+405  Method 不允许
+500  Gateway 内部错误
+503  Gateway 暂时不可用
+```
+
+认证失败的限流与 §21 的按 IP 保护共用同一份额度：该端点不会成为绕过限流的 Token 猜测入口。
+
+## 32.6 探针侧行为
+
+```text
+启动时拉取一次
+定期刷新（建议 5 分钟，具体由探针决定）
+刷新失败不得阻塞测量循环：沿用上一份已知列表继续工作
+```
+
+列表顺序稳定，探针可以直接对两次响应做 diff 来决定是否重建测量计划。
+
+探针在任何时候都只应测量列表内、且类型被允许的 Target。列表之外的结果会被
+Gateway 以 `400 invalid_target` / `400 invalid_probe_type` 拒绝（§29）。

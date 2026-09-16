@@ -2,8 +2,15 @@
 <div class="card">
   <h1>Targets</h1>
   <p class="muted">
-    Target ID 会用作业 Prometheus 的 <code>target</code> Label，改名会使历史 Series 断裂。
+    Target ID 会用作 Prometheus 的 <code>target</code> Label，改名会使历史 Series 断裂。
     未知 Target 或不允许的 Probe Type 一律被 Gateway 拒绝。
+  </p>
+  <p class="notice">
+    <strong>地址是运行数据，不是备注。</strong>探针通过 <code>GET /api/v1/targets</code>
+    拉取这份列表并拨测其中的地址：<code>icmp</code> 填要 ping 的 IP/域名，
+    <code>dns</code> 填要查询的 DNS 服务器地址，<code>http</code> 填完整 URL。
+    <strong>地址为空、全为空白、或该项被禁用的 Target 不会下发给探针</strong>——
+    探针看不到它，自然也不会测量它。
   </p>
   <table>
     <thead>
@@ -14,7 +21,7 @@
       <tr>
         <td><code>{{.TargetID}}</code></td>
         <td>{{.DisplayName}}</td>
-        <td class="muted">{{.Address}}</td>
+        <td {{if not .Address}}class="error"{{else}}class="muted"{{end}}>{{if .Address}}{{.Address}}{{else}}<strong>未填写 —— 探针看不到</strong>{{end}}</td>
         <td>{{range .ProbeTypes}}<code>{{.}}</code> {{end}}</td>
         <td>{{if .Enabled}}<span class="badge online">Enabled</span>{{else}}<span class="badge disabled">Disabled</span>{{end}}</td>
         <td class="actions">
