@@ -26,5 +26,19 @@
 <main>
 {{template "content" .}}
 </main>
+
+{{/* Confirmation for destructive actions. app.js fills in the message and
+     opens it; a browser that never runs the script falls back to the inline
+     confirm() each form carries. */}}
+<dialog class="modal" id="confirm-dialog" aria-labelledby="confirm-dialog-title">
+  <form method="dialog">
+    <h2 id="confirm-dialog-title">确认操作</h2>
+    <p class="modal-message"></p>
+    <div class="modal-actions">
+      <button value="cancel" class="btn secondary" autofocus>取消</button>
+      <button value="confirm" class="btn danger">确认</button>
+    </div>
+  </form>
+</dialog>
 </body>
 </html>

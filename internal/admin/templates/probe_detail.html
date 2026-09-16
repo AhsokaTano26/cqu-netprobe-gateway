@@ -32,6 +32,7 @@
       <button type="submit">轮换 Token</button>
     </form>
     <form method="post" action="/admin/probes/{{$p.Probe.ProbeID}}/delete" class="inline"
+          data-confirm="确定删除 {{$p.Probe.ProbeID}}？此操作不可恢复。"
           onsubmit="return confirm('确定删除 {{$p.Probe.ProbeID}}？此操作不可恢复。');">
       <input type="hidden" name="csrf" value="{{.CSRF}}">
       <button type="submit" class="danger">删除 Probe</button>

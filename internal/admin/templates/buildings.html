@@ -30,6 +30,7 @@
         <td><code>{{.Building.BuildingGroupCode}}</code> {{.Building.BuildingGroupName}}</td>
         <td class="actions">
           <form method="post" action="/admin/buildings/{{.Building.Code}}/delete"
+                data-confirm="确定删除楼栋 {{.Building.Code}}？"
                 onsubmit="return confirm('确定删除楼栋 {{.Building.Code}}？');">
             <input type="hidden" name="csrf" value="{{$csrf}}">
             <button type="submit" class="danger">删除</button>

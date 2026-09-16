@@ -24,6 +24,7 @@
         <td>{{formatTime .Campus.CreatedAt}}</td>
         <td class="actions">
           <form method="post" action="/admin/campuses/{{.Campus.Code}}/delete"
+                data-confirm="确定删除校区 {{.Campus.Code}}？"
                 onsubmit="return confirm('确定删除校区 {{.Campus.Code}}？');">
             <input type="hidden" name="csrf" value="{{$.CSRF}}">
             <button type="submit" class="danger">删除</button>

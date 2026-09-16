@@ -409,3 +409,61 @@
     }
   });
 })();
+
+// Confirmation for destructive actions.
+//
+// window.confirm() is drawn by the browser chrome and no stylesheet reaches it,
+// so it looks like the browser no matter what the page looks like. This uses a
+// <dialog> instead: the behaviour is still the platform's — modal focus
+// handling, Esc to dismiss, the page behind made inert — and the appearance is
+// ours.
+//
+// Each destructive form carries both data-confirm (for this) and an inline
+// onsubmit confirm() (for a browser that never runs this file). The enhancer
+// removes the inline one, so exactly one of the two ever guards a given form.
+(function () {
+  "use strict";
+
+  var dialog = document.getElementById("confirm-dialog");
+  if (!dialog || typeof dialog.showModal !== "function") {
+    // Without <dialog> support the inline confirm() stays in place and the
+    // form is still guarded, just in the browser's own style.
+    return;
+  }
+
+  var message = dialog.querySelector(".modal-message");
+  var pending = null;
+
+  // A <form method="dialog"> closes the dialog and leaves the clicked button's
+  // value in returnValue; Esc closes it without touching returnValue — which is
+  // why it is reset before every open. Without that reset, a dialog dismissed
+  // with Esc after an earlier confirmation would still read "confirm".
+  dialog.addEventListener("close", function () {
+    var action = pending;
+    pending = null;
+    if (dialog.returnValue === "confirm" && action) {
+      action();
+    }
+  });
+
+  document.querySelectorAll("form[data-confirm]").forEach(function (form) {
+    form.removeAttribute("onsubmit");
+
+    form.addEventListener("submit", function (event) {
+      if (form.dataset.confirmed === "1") {
+        return;
+      }
+      event.preventDefault();
+      message.textContent = form.dataset.confirm;
+      pending = function () {
+        form.dataset.confirmed = "1";
+        // requestSubmit, not submit: the second pass goes through the browser's
+        // own validation and every other submit listener, all of which
+        // submit() skips.
+        form.requestSubmit();
+      };
+      dialog.returnValue = "";
+      dialog.showModal();
+    });
+  });
+})();

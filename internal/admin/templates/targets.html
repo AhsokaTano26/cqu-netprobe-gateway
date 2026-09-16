@@ -26,6 +26,7 @@
         <td>{{if .Enabled}}<span class="badge online">Enabled</span>{{else}}<span class="badge disabled">Disabled</span>{{end}}</td>
         <td class="actions">
           <form method="post" action="/admin/targets/{{.TargetID}}/delete"
+                data-confirm="确定删除 Target {{.TargetID}}？使用它的 Probe 将立即被拒绝。"
                 onsubmit="return confirm('确定删除 Target {{.TargetID}}？使用它的 Probe 将立即被拒绝。');">
             <input type="hidden" name="csrf" value="{{$.CSRF}}">
             <button type="submit" class="danger">删除</button>

@@ -39,6 +39,7 @@
             <button type="submit">{{if .Probe.Enabled}}禁用{{else}}启用{{end}}</button>
           </form>
           <form method="post" action="/admin/probes/{{.Probe.ProbeID}}/delete"
+                data-confirm="确定删除 Probe {{.Probe.ProbeID}}？它的 Token 立即失效，测量数据会在下一次 scrape 时从 /metrics 消失。此操作不可撤销。"
                 onsubmit="return confirm('确定删除 Probe {{.Probe.ProbeID}}？它的 Token 立即失效，测量数据会在下一次 scrape 时从 /metrics 消失。此操作不可撤销。');">
             <input type="hidden" name="csrf" value="{{$.CSRF}}">
             <button type="submit" class="danger">删除</button>

@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -86,16 +87,12 @@ func TestStaticHandlerServesCSS(t *testing.T) {
 	}
 }
 
-// app.js only rebuilds a <select> that sits inside a .select wrapper, and the
-// stylesheet only hides the native control under that same class. A bare
-// <select> added later would quietly render as the browser's own dropdown —
-// exactly what the custom component exists to replace — so the rule is checked
-// here rather than left to whoever reviews the next form.
-//
-// This walks the two UI packages' template directories, which is unusual for
-// this package; it lives here because the wrapper is part of the shared
-// component, and neither admin nor portal should own the rule.
-func TestEverySelectIsWrappedForTheCustomDropdown(t *testing.T) {
+// templateFiles lists the page templates of both UI packages. Reaching into a
+// sibling package's directory is unusual; it is done here because the rules
+// below are about the shared component, and neither admin nor portal should own
+// them.
+func templateFiles(t *testing.T) []string {
+	t.Helper()
 	var files []string
 	for _, dir := range []string{"../admin/templates", "../portal/templates"} {
 		found, err := filepath.Glob(filepath.Join(dir, "*.html"))
@@ -107,14 +104,59 @@ func TestEverySelectIsWrappedForTheCustomDropdown(t *testing.T) {
 		}
 		files = append(files, found...)
 	}
+	return files
+}
 
-	selects := 0
-	for _, file := range files {
-		data, err := os.ReadFile(file)
-		if err != nil {
-			t.Fatalf("read %s: %v", file, err)
+func readTemplate(t *testing.T, file string) string {
+	t.Helper()
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatalf("read %s: %v", file, err)
+	}
+	return string(data)
+}
+
+// Every destructive form states its message twice: in data-confirm for the
+// styled dialog app.js opens, and in an inline confirm() that still guards the
+// form when the script never runs. Two copies of one sentence drift, so they
+// are compared here. A form carrying only the inline one would keep using the
+// browser's own dialog, which is exactly what is being replaced.
+func TestDestructiveFormsAgreeOnTheirMessage(t *testing.T) {
+	styled := regexp.MustCompile(`data-confirm="([^"]*)"`)
+	native := regexp.MustCompile(`return confirm\('([^']*)'\)`)
+
+	confirmed := 0
+	for _, file := range templateFiles(t) {
+		source := readTemplate(t, file)
+
+		for _, match := range styled.FindAllStringSubmatch(source, -1) {
+			confirmed++
+			if !strings.Contains(source, "return confirm('"+match[1]+"')") {
+				t.Errorf("%s: data-confirm %q has no inline confirm() fallback, so a browser without scripting deletes without asking",
+					file, match[1])
+			}
 		}
-		source := string(data)
+		for _, match := range native.FindAllStringSubmatch(source, -1) {
+			if !strings.Contains(source, `data-confirm="`+match[1]+`"`) {
+				t.Errorf("%s: the inline confirm() %q has no data-confirm, so it uses the browser dialog instead of the styled one",
+					file, match[1])
+			}
+		}
+	}
+	if confirmed == 0 {
+		t.Error("no destructive form was found, so this test verified nothing")
+	}
+}
+
+// app.js only rebuilds a <select> that sits inside a .select wrapper, and the
+// stylesheet only hides the native control under that same class. A bare
+// <select> added later would quietly render as the browser's own dropdown —
+// exactly what the custom component exists to replace — so the rule is checked
+// here rather than left to whoever reviews the next form.
+func TestEverySelectIsWrappedForTheCustomDropdown(t *testing.T) {
+	selects := 0
+	for _, file := range templateFiles(t) {
+		source := readTemplate(t, file)
 		for at := 0; ; {
 			i := strings.Index(source[at:], "<select")
 			if i < 0 {
