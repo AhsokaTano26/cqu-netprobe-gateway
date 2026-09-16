@@ -43,14 +43,14 @@ a09,A区9舍,a_dorm,A区学生宿舍
 a10,A区10舍,a_dorm,A区学生宿舍
 a11,A区11舍,a_dorm,A区学生宿舍
 a12,A区12舍,a_dorm,A区学生宿舍
-acd,ACD楼,a_teach,A区教学楼
+acd,ACD楼,a_acd,A区acd楼
 xuelin,学林宾馆,a_hotel,A区学林宾馆
 ```
 
 | 楼栋群代号 | 楼栋群显示名 | 栋数 |
 |---|---|---|
 | `a_dorm` | A区学生宿舍 | 12 |
-| `a_teach` | A区教学楼 | 1 |
+| `a_acd` | A区acd楼 | 1 |
 | `a_hotel` | A区学林宾馆 | 1 |
 
 ---
