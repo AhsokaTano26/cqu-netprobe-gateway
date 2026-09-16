@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +28,9 @@ var networkTypes = map[string]bool{"wired": true, "wireless": true}
 const probeIDRandomBytes = 3
 
 func validCode(s string) bool { return codePattern.MatchString(s) }
+
+// itoa keeps the import list in this package free of strconv for one call site.
+func itoa(n int) string { return strconv.Itoa(n) }
 
 // generateProbeID builds "{campus}-{building}-{6 hex}".
 func generateProbeID(campusCode, buildingCode string) (string, error) {

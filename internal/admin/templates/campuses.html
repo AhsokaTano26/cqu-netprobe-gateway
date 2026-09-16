@@ -1,0 +1,53 @@
+{{define "content"}}
+<div class="card">
+  <h1>校区</h1>
+  <p class="muted">
+    校区代号会作为 Prometheus 的 <code>campus</code> Label 并进入 <code>probe_id</code>，
+    创建后不可修改——改名会断裂历史 Series。显示名只用于页面，随时可改。
+  </p>
+  {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+  <table>
+    <thead><tr><th>代号</th><th>显示名</th><th>楼栋数</th><th>创建时间</th><th>操作</th></tr></thead>
+    <tbody>
+    {{range .Pages.campuses}}
+      <tr>
+        <td><code>{{.Campus.Code}}</code></td>
+        <td>
+          <form method="post" action="/admin/campuses/{{.Campus.Code}}/update" class="inline">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <input type="text" name="name" value="{{.Campus.Name}}" required>
+            <input type="hidden" name="code" value="{{.Campus.Code}}">
+            <button type="submit">保存</button>
+          </form>
+        </td>
+        <td>{{.Buildings}}</td>
+        <td>{{formatTime .Campus.CreatedAt}}</td>
+        <td class="actions">
+          <form method="post" action="/admin/campuses/{{.Campus.Code}}/delete"
+                onsubmit="return confirm('确定删除校区 {{.Campus.Code}}？');">
+            <input type="hidden" name="csrf" value="{{$.CSRF}}">
+            <button type="submit" class="danger">删除</button>
+          </form>
+        </td>
+      </tr>
+    {{else}}
+      <tr><td colspan="5" class="muted">还没有校区。先在下方新增。</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>新增校区</h2>
+  <form method="post" action="/admin/campuses/new">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <label>代号（小写字母、数字、下划线，≤16 位，进 Label，创建后不可改）
+      <input type="text" name="code" placeholder="hx" required>
+    </label>
+    <label>显示名（中文，仅页面展示）
+      <input type="text" name="name" placeholder="虎溪" required>
+    </label>
+    <button type="submit">新增</button>
+  </form>
+</div>
+{{end}}

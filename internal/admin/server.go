@@ -22,6 +22,7 @@ var adminPages = []string{
 	"probe_detail.html",
 	"token.html",
 	"targets.html",
+	"campuses.html",
 }
 
 // pageFS holds this package's page files. An embed pattern keeps the directory
@@ -173,9 +174,9 @@ func (s *Server) PasswordGeneration() (string, bool) {
 	return s.generatedPassword, s.generatedPassword != ""
 }
 
-// Routes returns the admin mux: the session routes, the eight probe routes and
-// the four target routes. The shared stylesheet is not served here; main
-// registers webui.StaticHandler once on the public listener.
+// Routes returns the admin mux: the session routes, the eight probe routes, the
+// four target routes and the catalog routes. The shared stylesheet is not served
+// here; main registers webui.StaticHandler once on the public listener.
 func (s *Server) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
 
@@ -198,6 +199,12 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.Handle("POST /admin/targets/new", s.requireSession(s.requireCSRF(http.HandlerFunc(s.handleTargetCreate))))
 	mux.Handle("POST /admin/targets/{id}/update", s.requireSession(s.requireCSRF(http.HandlerFunc(s.handleTargetUpdate))))
 	mux.Handle("POST /admin/targets/{id}/delete", s.requireSession(s.requireCSRF(http.HandlerFunc(s.handleTargetDelete))))
+
+	// Campus catalog (Task 4).
+	mux.Handle("GET /admin/campuses", s.requireSession(http.HandlerFunc(s.handleCampusList)))
+	mux.Handle("POST /admin/campuses/new", s.requireSession(s.requireCSRF(http.HandlerFunc(s.handleCampusCreate))))
+	mux.Handle("POST /admin/campuses/{code}/update", s.requireSession(s.requireCSRF(http.HandlerFunc(s.handleCampusUpdate))))
+	mux.Handle("POST /admin/campuses/{code}/delete", s.requireSession(s.requireCSRF(http.HandlerFunc(s.handleCampusDelete))))
 
 	return mux
 }
