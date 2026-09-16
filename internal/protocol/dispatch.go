@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 )
 
 // Measurement parameters dispatched with the target list (Protocol v1 §32.4).
@@ -172,25 +173,69 @@ var configIDNamespace = [16]byte{
 	0x9c, 0x31, 0x2f, 0x0b, 0x5e, 0x88, 0x41, 0xd2,
 }
 
-// ID identifies this parameter set, as a UUID derived from its values.
+// DispatchTarget is one entry of the target list, as sent to a probe (§32.3)
+// and as it enters the config identity.
+//
+// Exactly three fields, and that is the point: these are the fields a probe
+// acts on, so nothing cosmetic can move the ID. Renaming a target, or editing
+// its description, does not tell the whole fleet to re-fetch.
+type DispatchTarget struct {
+	TargetID   string   `json:"target_id"`
+	Address    string   `json:"address"`
+	ProbeTypes []string `json:"probe_types"`
+}
+
+// configIdentity is what ConfigID hashes: the measurement parameters and the
+// dispatched target list together. Marshalled as one object rather than
+// concatenated, so the two parts cannot be confused for each other.
+type configIdentity struct {
+	Config  MeasurementConfig `json:"config"`
+	Targets []DispatchTarget  `json:"targets"`
+}
+
+// ConfigID identifies a whole dispatched configuration — the measurement
+// parameters and the target list together — as a UUID derived from its values.
 //
 // It is derived rather than generated, which is the property the staleness
-// check needs: saving the form again with the same numbers produces the same
-// ID, so a no-op edit does not tell every probe in the fleet to re-fetch. It
-// also means nothing has to be stored — the ID of a deployment that has never
+// check needs: saving a form again with the same values produces the same ID,
+// so a no-op edit does not tell every probe in the fleet to re-fetch. It also
+// means nothing has to be stored — the ID of a deployment that has never
 // customised anything is simply the ID of the defaults.
+//
+// Both halves belong in the hash. The parameters alone were not enough: an
+// administrator who deletes a target leaves every probe still measuring it, and
+// with a parameters-only ID those probes hold what the gateway considers the
+// current config, so they get 400 invalid_target instead of 409 and are never
+// told to come back for the new list. They stay rejected, and §23 keeps their
+// last_seen frozen, until their own periodic refresh happens to fire.
+//
+// The ID is over the *set*, not the sequence: targets are sorted by ID and each
+// type list is sorted before hashing, so a caller that lists the same targets
+// in another order still gets the same ID. The caller's slices are copied
+// first; sorting them in place would mutate what they passed in.
 //
 // The marshalling order is the struct's field order, which is fixed, so the
 // bytes hashed are the same on every run.
-func (c MeasurementConfig) ID() string {
-	canonical, err := json.Marshal(c)
+func ConfigID(cfg MeasurementConfig, targets []DispatchTarget) string {
+	// make, not var: a nil slice marshals as null and an empty one as [], and
+	// those are different bytes for what is the same configuration.
+	canonical := make([]DispatchTarget, len(targets))
+	for i, t := range targets {
+		types := append([]string{}, t.ProbeTypes...)
+		sort.Strings(types)
+		canonical[i] = DispatchTarget{TargetID: t.TargetID, Address: t.Address, ProbeTypes: types}
+	}
+	sort.Slice(canonical, func(i, j int) bool { return canonical[i].TargetID < canonical[j].TargetID })
+
+	payload, err := json.Marshal(configIdentity{Config: cfg, Targets: canonical})
 	if err != nil {
-		// Unreachable: every field is an int, a bool or a string.
+		// Unreachable: every field is an int, a bool, a string or a slice of
+		// those.
 		return ""
 	}
 	h := sha1.New() //nolint:gosec // UUIDv5 is defined over SHA-1; this is identity, not integrity.
 	_, _ = h.Write(configIDNamespace[:])
-	_, _ = h.Write(canonical)
+	_, _ = h.Write(payload)
 	sum := h.Sum(nil)
 
 	var id [16]byte

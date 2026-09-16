@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/tano/cqu-netprobe-gateway/internal/protocol"
+	"github.com/tano/cqu-netprobe-gateway/internal/store"
 )
 
 // targetsVersion is the version of the target-list response. It is separate from
@@ -23,16 +24,37 @@ type targetsResponse struct {
 	// constant across targets: the gateway does not model a target that needs a
 	// different timeout.
 	Config protocol.MeasurementConfig `json:"config"`
-	// ConfigID identifies that parameter set. The probe echoes it on every push
-	// so the gateway can tell it, with a 409, that the config has moved on.
-	ConfigID string        `json:"config_id"`
-	Targets  []targetEntry `json:"targets"`
+	// ConfigID identifies what this response dispenses — the parameters and the
+	// target list together. The probe echoes it on every push so the gateway can
+	// tell it, with a 409, that anything here has moved on.
+	//
+	// It is derived from Targets below, so the ID and the list a probe is about
+	// to act on cannot disagree.
+	ConfigID string `json:"config_id"`
+	// Targets is hashed for the ID as well as sent, which is why its element
+	// type is the protocol's own: one value, used twice, with no mapping step
+	// that could drift.
+	Targets []protocol.DispatchTarget `json:"targets"`
 }
 
-type targetEntry struct {
-	TargetID   string   `json:"target_id"`
-	Address    string   `json:"address"`
-	ProbeTypes []string `json:"probe_types"`
+// dispatchEntries converts the store's rows into the shape that is both sent to
+// the probe and hashed for its config_id.
+//
+// One function, used by both endpoints, because the target list and the
+// push-side staleness check have to agree exactly: if the list served here and
+// the list the ID was derived from could differ, a probe could be handed a
+// config_id that the push handler then rejects. Guaranteeing that by
+// construction is cheaper than keeping two copies in step.
+func dispatchEntries(targets []store.DispatchTarget) []protocol.DispatchTarget {
+	entries := make([]protocol.DispatchTarget, 0, len(targets))
+	for _, t := range targets {
+		entries = append(entries, protocol.DispatchTarget{
+			TargetID:   t.TargetID,
+			Address:    t.Address,
+			ProbeTypes: t.ProbeTypes,
+		})
+	}
+	return entries
 }
 
 // handleTargets serves the target list to an authenticated probe.
@@ -74,14 +96,7 @@ func (s *Server) handleTargets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entries := make([]targetEntry, 0, len(targets))
-	for _, t := range targets {
-		entries = append(entries, targetEntry{
-			TargetID:   t.TargetID,
-			Address:    t.Address,
-			ProbeTypes: t.ProbeTypes,
-		})
-	}
+	entries := dispatchEntries(targets)
 
 	// The list is a few hundred bytes and changes only when an administrator
 	// edits it, so let a probe revalidate cheaply instead of re-downloading.
@@ -91,7 +106,7 @@ func (s *Server) handleTargets(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(targetsResponse{
 		Version:  targetsVersion,
 		Config:   config,
-		ConfigID: config.ID(),
+		ConfigID: protocol.ConfigID(config, entries),
 		Targets:  entries,
 	})
 

@@ -135,6 +135,23 @@ const goodBody = `{
 
 func (h *harness) bearer() string { return "Bearer " + h.tok }
 
+// configID is the ID the server is dispensing right now: whatever measurement
+// config the store holds, plus the target list it would hand out. It mirrors
+// what handleTargets and handlePush both compute, so a test can give a probe the
+// ID it would really have received — including after an edit that moves it.
+func (h *harness) configID(t *testing.T) string {
+	t.Helper()
+	cfg, _, err := h.store.MeasurementConfig()
+	if err != nil {
+		t.Fatalf("MeasurementConfig() error = %v", err)
+	}
+	targets, err := h.store.DispatchTargets()
+	if err != nil {
+		t.Fatalf("DispatchTargets() error = %v", err)
+	}
+	return protocol.ConfigID(cfg, dispatchEntries(targets))
+}
+
 func TestPushAcceptsValidRequest(t *testing.T) {
 	h := newHarness(t)
 	rec := h.do(t, http.MethodPost, goodBody, "application/json", h.bearer())
@@ -926,9 +943,34 @@ func TestAuthFailureThrottleSeparatesClientsBehindATrustedProxy(t *testing.T) {
 	})
 }
 
-// bodyWithConfig is goodBody with a config_id appended.
-func bodyWithConfig(id string) string {
-	return strings.Replace(goodBody, `"results"`, `"config_id": "`+id+`", "results"`, 1)
+// bodyWithConfig is a push body with a config_id appended. It takes the body
+// rather than assuming goodBody, because some tests need to vary the payload
+// first — dropping a target the gateway no longer dispatches, say — and then
+// attach the ID a probe would have fetched.
+func bodyWithConfig(body, id string) string {
+	return strings.Replace(body, `"results"`, `"config_id": "`+id+`", "results"`, 1)
+}
+
+// goodBodyWithout removes one target's entry from goodBody, which is the payload
+// a probe sends after re-fetching a list that no longer contains it. Each result
+// sits on its own line, so the comma that ended the previous line has to go too.
+func goodBodyWithout(t *testing.T, targetID string) string {
+	t.Helper()
+	var kept []string
+	for _, line := range strings.Split(goodBody, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), `"`+targetID+`"`) {
+			if n := len(kept); n > 0 {
+				kept[n-1] = strings.TrimSuffix(kept[n-1], ",")
+			}
+			continue
+		}
+		kept = append(kept, line)
+	}
+	out := strings.Join(kept, "\n")
+	if out == goodBody {
+		t.Fatalf("goodBody has no %q entry to remove", targetID)
+	}
+	return out
 }
 
 // The flow this exists for: an administrator edits the measurement parameters,
@@ -937,23 +979,24 @@ func bodyWithConfig(id string) string {
 func TestPushRejectsAStaleConfigAndAcceptsTheNewOne(t *testing.T) {
 	h := newHarness(t)
 
-	current := protocol.DefaultMeasurementConfig()
-	stale := current
-	stale.ICMP.Count = 10
+	// What a probe fetched before the edit.
+	current := h.configID(t)
 
 	// A probe that already has the current config is served normally.
-	rec := h.do(t, http.MethodPost, bodyWithConfig(current.ID()), "application/json", h.bearer())
+	rec := h.do(t, http.MethodPost, bodyWithConfig(goodBody, current), "application/json", h.bearer())
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("push with the current config = %d, want 204; body = %s", rec.Code, rec.Body.String())
 	}
 
 	// The administrator changes the parameters.
+	stale := protocol.DefaultMeasurementConfig()
+	stale.ICMP.Count = 10
 	if err := h.store.SetMeasurementConfig(stale); err != nil {
 		t.Fatalf("SetMeasurementConfig() error = %v", err)
 	}
 
 	// The same probe now holds a stale ID.
-	rec = h.do(t, http.MethodPost, bodyWithConfig(current.ID()), "application/json", h.bearer())
+	rec = h.do(t, http.MethodPost, bodyWithConfig(goodBody, current), "application/json", h.bearer())
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("push with a stale config = %d, want 409; body = %s", rec.Code, rec.Body.String())
 	}
@@ -963,9 +1006,50 @@ func TestPushRejectsAStaleConfigAndAcceptsTheNewOne(t *testing.T) {
 
 	// And once it re-fetches, it is accepted again. The ID comes from the
 	// dispatch response, exactly as a probe would get it.
-	rec = h.do(t, http.MethodPost, bodyWithConfig(stale.ID()), "application/json", h.bearer())
+	rec = h.do(t, http.MethodPost, bodyWithConfig(goodBody, h.configID(t)), "application/json", h.bearer())
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("push after re-fetching = %d, want 204; body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Deleting a target is a configuration change like any other: it has to move
+// the ID, or a probe still measuring that target keeps a config the gateway
+// calls current, collects 400 invalid_target, and is never told to re-fetch.
+//
+// The target deleted here is one goodBody measures, so the probe's next push
+// carries a result for a target that no longer exists — which is exactly the
+// payload a probe would send if nobody had told it.
+func TestDeletingATargetTellsProbesToRefetch(t *testing.T) {
+	h := newHarness(t)
+	current := h.configID(t)
+
+	if err := h.store.DeleteTarget("cqu_mirror"); err != nil {
+		t.Fatalf("DeleteTarget() error = %v", err)
+	}
+	if h.configID(t) == current {
+		t.Fatal("deleting a target left the config ID unchanged: probes still " +
+			"measuring it will be answered invalid_target with no way to learn why")
+	}
+
+	rec := h.do(t, http.MethodPost, bodyWithConfig(goodBody, current), "application/json", h.bearer())
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("push after a target was deleted = %d, want 409; body = %s",
+			rec.Code, rec.Body.String())
+	}
+	// Not invalid_target: that error says "this target is unknown", which the
+	// probe cannot act on. config_stale says "fetch the list again", which is
+	// what its problem actually is.
+	if code := errorCode(t, rec); code != protocol.CodeConfigStale {
+		t.Errorf("error code = %q, want %q", code, protocol.CodeConfigStale)
+	}
+
+	// Having re-fetched, the probe drops the deleted target and is accepted.
+	// That is what makes the 409 a way out rather than a dead end.
+	rec = h.do(t, http.MethodPost,
+		bodyWithConfig(goodBodyWithout(t, "cqu_mirror"), h.configID(t)), "application/json", h.bearer())
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("push with the refetched config = %d, want 204; body = %s",
+			rec.Code, rec.Body.String())
 	}
 }
 
@@ -975,14 +1059,16 @@ func TestPushRejectsAStaleConfigAndAcceptsTheNewOne(t *testing.T) {
 func TestStaleConfigDoesNotRefreshLastSeen(t *testing.T) {
 	h := newHarness(t)
 
+	// The ID a probe fetched before the edit — which is now stale.
+	before := h.configID(t)
+
 	stale := protocol.DefaultMeasurementConfig()
 	stale.DNS.TimeoutMS = 2500
 	if err := h.store.SetMeasurementConfig(stale); err != nil {
 		t.Fatalf("SetMeasurementConfig() error = %v", err)
 	}
 
-	rec := h.do(t, http.MethodPost, bodyWithConfig(protocol.DefaultMeasurementConfig().ID()),
-		"application/json", h.bearer())
+	rec := h.do(t, http.MethodPost, bodyWithConfig(goodBody, before), "application/json", h.bearer())
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409", rec.Code)
 	}

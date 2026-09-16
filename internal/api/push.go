@@ -173,7 +173,25 @@ func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, protocol.CodeServiceUnavailable, msgUnavailable)
 		return
 	}
-	if err := req.Validate(allowlist, config.ID()); err != nil {
+	// The dispatch list is read here as well as in handleTargets: the ID covers
+	// the target list too, and it has to be derived from the same rows that
+	// endpoint is handing out. That is one more indexed read per push, on a path
+	// that already does two — not cached, for the same reason the reads above
+	// are not: the admin UI is the only writer, and a stale ID here would tell
+	// probes the wrong thing about their own configuration.
+	//
+	// Note this is DispatchTargets, not Allowlist: the two differ, and
+	// deliberately. A target with an empty address is dispatched by neither
+	// (§32.5) but stays in the allowlist, so a probe that measures it anyway is
+	// told its target is unknown rather than that its config is stale.
+	targets, err := s.store.DispatchTargets()
+	if err != nil {
+		s.logger.Error("failed to list dispatch targets", "error", err)
+		s.reject(protocol.CodeInternalError, probe.ProbeID)
+		writeError(w, http.StatusServiceUnavailable, protocol.CodeServiceUnavailable, msgUnavailable)
+		return
+	}
+	if err := req.Validate(allowlist, protocol.ConfigID(config, dispatchEntries(targets))); err != nil {
 		s.writeProtocolError(w, err, probe.ProbeID)
 		return
 	}
