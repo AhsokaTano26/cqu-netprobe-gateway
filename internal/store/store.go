@@ -16,6 +16,10 @@ import (
 var (
 	ErrNotFound  = errors.New("not found")
 	ErrDuplicate = errors.New("duplicate")
+	// ErrInUse is returned when deleting a catalog entry that probes still
+	// reference. Deleting it silently would leave those probes pointing at a
+	// building the dropdowns no longer offer.
+	ErrInUse = errors.New("in use")
 )
 
 // Store is a handle to the SQLite database.

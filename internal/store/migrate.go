@@ -101,7 +101,56 @@ func (s *Store) migrate() error {
 		}
 	}
 
+	if err := s.backfillCatalog(); err != nil {
+		return err
+	}
 	return s.seed()
+}
+
+// backfillCatalog seeds the catalog from probes that predate it, so an upgraded
+// gateway keeps offering its current campuses and buildings in the dropdowns
+// instead of presenting an empty list and making existing locations
+// unselectable.
+//
+// It runs on every Open but acts only when the catalog is empty, which mirrors
+// the target seeding rule: an administrator who deletes a campus does not get it
+// resurrected by the next restart. It is deliberately not part of migration 002
+// — a migration runs once, so a database already at 002 could never be
+// reconciled.
+func (s *Store) backfillCatalog() error {
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM campuses`).Scan(&n); err != nil {
+		return fmt.Errorf("store: count campuses: %w", err)
+	}
+	if n > 0 {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("store: begin backfill: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// GROUP BY picks one name per code. A code whose names disagree across probe
+	// rows is a pre-existing inconsistency this reconciliation cannot resolve; it
+	// keeps the first row SQLite returns.
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO campuses (code, name, created_at, updated_at)
+		SELECT campus_code, campus_name, ?, ? FROM probes GROUP BY campus_code`,
+		nowUnix(), nowUnix()); err != nil {
+		return fmt.Errorf("store: backfill campuses: %w", err)
+	}
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO buildings (code, campus_code, building_group_code,
+		building_group_name, name, created_at, updated_at)
+		SELECT building_code, campus_code, building_group_code, building_group_name,
+		       building_name, ?, ? FROM probes GROUP BY building_code`,
+		nowUnix(), nowUnix()); err != nil {
+		return fmt.Errorf("store: backfill buildings: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: commit backfill: %w", err)
+	}
+	return nil
 }
 
 // defaultTargets is the Target set from Protocol v1 §12. Every entry carries an

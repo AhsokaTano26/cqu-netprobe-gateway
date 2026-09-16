@@ -66,14 +66,20 @@ func TestMigrationsAreIdempotent(t *testing.T) {
 		t.Errorf("CampusName = %q, want 虎溪", got.CampusName)
 	}
 
-	// Migration bookkeeping must be recorded exactly once, so a re-apply is
-	// caught by the count rather than only by the version PRIMARY KEY.
+	// Migration bookkeeping must be recorded exactly once per version, so a
+	// re-apply is caught by the count rather than only by the version PRIMARY
+	// KEY. The expectation is derived from the embedded migrations rather than
+	// hard-coded, so adding a migration does not silently weaken this check.
+	migrations, err := loadMigrations()
+	if err != nil {
+		t.Fatalf("loadMigrations() error = %v", err)
+	}
 	var applied int
 	if err := s2.db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&applied); err != nil {
 		t.Fatalf("count schema_migrations: %v", err)
 	}
-	if applied != 1 {
-		t.Errorf("schema_migrations rows = %d, want 1", applied)
+	if applied != len(migrations) {
+		t.Errorf("schema_migrations rows = %d, want %d (one per migration)", applied, len(migrations))
 	}
 }
 
