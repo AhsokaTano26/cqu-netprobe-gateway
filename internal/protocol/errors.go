@@ -11,6 +11,7 @@ const (
 	CodeUnauthorized       = "unauthorized"
 	CodeProbeDisabled      = "probe_disabled"
 	CodeRateLimited        = "rate_limited"
+	CodeConfigStale        = "config_stale"
 	CodeInternalError      = "internal_error"
 	CodeServiceUnavailable = "service_unavailable"
 )

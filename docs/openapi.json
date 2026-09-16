@@ -57,7 +57,8 @@
                   "cqu_mirror": {
                     "http": { "success": true, "status_code": 200, "duration_ms": 51.2 }
                   }
-                }
+                },
+                "config_id": "23ea604f-6e47-5710-bc10-ab9b6a1302a3"
               }
             }
           }
@@ -72,6 +73,12 @@
           },
           "401": { "$ref": "#/components/responses/Unauthorized" },
           "403": { "$ref": "#/components/responses/Forbidden" },
+          "409": {
+            "description": "探针持有的测量配置已过期（`config_stale`）：它上报的 `config_id` 与本机当前下发的配置不一致。\n\n**该 Push 未被接受**：`last_seen` 不刷新，数据也不入库。用旧参数测出来的值与新参数不可比，混进同一条时序会让配置变更点无法解释——宁可丢掉变更瞬间的那一个数据点，也不要一条读不出含义的曲线。\n\n探针应当：立刻重新拉取 `GET /api/v1/targets`，并在**下一轮**测量用新的 `config_id` 上报。不要对同一次测量立刻重试——那只会白白消耗自己的推送额度。若重新拉取失败，继续按旧列表测量并继续上报即可，网关会持续返回 409 直到探针拿到新配置。",
+            "content": {
+              "application/json": { "schema": { "$ref": "#/components/schemas/Error" } }
+            }
+          },
           "405": { "$ref": "#/components/responses/MethodNotAllowed" },
           "413": {
             "description": "请求体超过 64 KiB（65536 字节，§20）。探针的探测量远小于该值，出现即说明 Payload 结构有问题。",
@@ -116,6 +123,7 @@
                     },
                     "dns": { "transport": "udp", "timeout_ms": 3000 }
                   },
+                  "config_id": "23ea604f-6e47-5710-bc10-ab9b6a1302a3",
                   "targets": [
                     {
                       "target_id": "aliyun_dns",
@@ -248,6 +256,7 @@
           "unauthorized",
           "probe_disabled",
           "rate_limited",
+          "config_stale",
           "internal_error",
           "service_unavailable"
         ],
@@ -271,6 +280,11 @@
             "type": "string",
             "maxLength": 32,
             "description": "探针版本号，建议语义化版本。上限为 **32 字节**（JSON Schema 的 `maxLength` 按字符计数，Gateway 按字节计数，非 ASCII 版本号以 Gateway 的规则为准）。不得用作 Prometheus Label（§6）。"
+          },
+          "config_id": {
+            "type": "string",
+            "maxLength": 64,
+            "description": "探针测量时所用的配置标识，原样回传 `GET /api/v1/targets` 的 `config_id`。\n\n**可选**：不带此字段的探针（早于本字段的版本）照常被接受，只是永远不会收到 `409`。带上但与本机当前配置不符时，整条 Push 被拒绝并返回 `409 config_stale`，探针应立刻重新拉取目标列表。"
           },
           "results": {
             "type": "object",
@@ -380,7 +394,7 @@
       },
       "TargetList": {
         "type": "object",
-        "required": ["version", "config", "targets"],
+        "required": ["version", "config", "config_id", "targets"],
         "properties": {
           "version": {
             "type": "integer",
@@ -388,6 +402,11 @@
             "description": "本响应结构的版本，当前固定为 1。同版本内只允许**新增可选字段**：不得删除、改名、改类型或改单位，探针必须忽略不认识的字段。"
           },
           "config": { "$ref": "#/components/schemas/MeasurementConfig" },
+          "config_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "description": "本次下发配置的标识（UUID v5）。探针必须原样保存，并在每次上报时通过 `config_id` 回传；对不上就会收到 `409 config_stale`。\n\n**由参数值推导，而非每次保存生成**：把表单原样再存一次不会改变它，因此不会无谓地让全部探针重新拉取。"
+          },
           "targets": {
             "type": "array",
             "items": { "$ref": "#/components/schemas/Target" },

@@ -24,6 +24,7 @@ const (
 	msgUnauthorized = "missing or invalid credentials"
 	msgDisabled     = "probe is disabled"
 	msgRateLimited  = "too many requests"
+	msgConfigStale  = "measurement config is out of date; fetch the target list again"
 	msgTooLarge     = "request body too large"
 	msgMediaType    = "unsupported content type"
 	msgMethod       = "method not allowed"
@@ -65,6 +66,11 @@ func statusForCode(code string) int {
 		return http.StatusForbidden
 	case protocol.CodeRateLimited:
 		return http.StatusTooManyRequests
+	// 409, not 400: the push is well-formed and the credentials are fine, but
+	// the probe measured with parameters this gateway no longer dispatches, so
+	// the two sides disagree about what the payload means.
+	case protocol.CodeConfigStale:
+		return http.StatusConflict
 	case protocol.CodeServiceUnavailable:
 		return http.StatusServiceUnavailable
 	default:
@@ -89,6 +95,8 @@ func messageForCode(code string) string {
 		return msgDisabled
 	case protocol.CodeRateLimited:
 		return msgRateLimited
+	case protocol.CodeConfigStale:
+		return msgConfigStale
 	case protocol.CodeInternalError:
 		return errInternal
 	case protocol.CodeServiceUnavailable:

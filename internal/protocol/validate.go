@@ -10,14 +10,37 @@ import (
 // away; 1e-6 would be too tight, 1e-2 too loose to catch real mismatches.
 const lossRatioTolerance = 1e-3
 
+// MaxConfigIDLen bounds the config_id a probe may send. The gateway only ever
+// emits a 36-character UUID, so anything longer is a client bug or an attempt
+// to make the comparison do work.
+const MaxConfigIDLen = 64
+
 // Validate applies every request-level rule in Protocol v1. It is the single
 // entry point the push handler calls after Decode succeeded.
 //
+// currentConfigID is the measurement config the gateway is dispatching right
+// now; a request that names a different one is rejected. Pass the empty string
+// only where no config is being dispatched, which rejects any request that
+// names one.
+//
 // Targets are visited in sorted order so that a request with several problems
 // always reports the same first error, keeping logs correlatable.
-func (r *PushRequest) Validate(al Allowlist) error {
+func (r *PushRequest) Validate(al Allowlist, currentConfigID string) error {
 	if r.Version != Version {
 		return newError(CodeUnsupportedVersion, "unsupported protocol version")
+	}
+	// Staleness is checked before the measurement rules, and that order is
+	// deliberate: a probe holding an old config is judging its payload against
+	// parameters this gateway no longer dispatches, so the useful answer is
+	// "fetch the config again" rather than a complaint about a rule the probe
+	// has never seen. An administrator who removes a target would otherwise
+	// leave every stale probe answering 400 forever, with nothing telling it
+	// why.
+	if len(r.ConfigID) > MaxConfigIDLen {
+		return newError(CodeInvalidPayload, "config_id is too long")
+	}
+	if r.ConfigID != "" && r.ConfigID != currentConfigID {
+		return newError(CodeConfigStale, "measurement config is out of date")
 	}
 	if r.Timestamp < 0 {
 		return newError(CodeInvalidPayload, "timestamp must not be negative")

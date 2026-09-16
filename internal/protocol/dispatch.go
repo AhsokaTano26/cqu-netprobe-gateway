@@ -1,6 +1,8 @@
 package protocol
 
 import (
+	"crypto/sha1"
+	"encoding/json"
 	"errors"
 	"fmt"
 )
@@ -160,6 +162,54 @@ func (c MeasurementConfig) Validate() error {
 		return fmt.Errorf("DNS 超时 %d 毫秒必须小于测量周期 %d 毫秒", c.DNS.TimeoutMS, c.IntervalMS)
 	}
 	return nil
+}
+
+// configIDNamespace is the UUIDv5 namespace for measurement configs. The value
+// is arbitrary and used nowhere else; it only has to be fixed, so that the same
+// parameter set always maps to the same UUID.
+var configIDNamespace = [16]byte{
+	0x6f, 0x1d, 0x3d, 0x2e, 0x8a, 0x14, 0x4b, 0x77,
+	0x9c, 0x31, 0x2f, 0x0b, 0x5e, 0x88, 0x41, 0xd2,
+}
+
+// ID identifies this parameter set, as a UUID derived from its values.
+//
+// It is derived rather than generated, which is the property the staleness
+// check needs: saving the form again with the same numbers produces the same
+// ID, so a no-op edit does not tell every probe in the fleet to re-fetch. It
+// also means nothing has to be stored — the ID of a deployment that has never
+// customised anything is simply the ID of the defaults.
+//
+// The marshalling order is the struct's field order, which is fixed, so the
+// bytes hashed are the same on every run.
+func (c MeasurementConfig) ID() string {
+	canonical, err := json.Marshal(c)
+	if err != nil {
+		// Unreachable: every field is an int, a bool or a string.
+		return ""
+	}
+	h := sha1.New() //nolint:gosec // UUIDv5 is defined over SHA-1; this is identity, not integrity.
+	_, _ = h.Write(configIDNamespace[:])
+	_, _ = h.Write(canonical)
+	sum := h.Sum(nil)
+
+	var id [16]byte
+	copy(id[:], sum)
+	id[6] = (id[6] & 0x0f) | 0x50 // version 5: name-based
+	id[8] = (id[8] & 0x3f) | 0x80 // RFC 4122 variant
+	return formatUUID(id)
+}
+
+func formatUUID(id [16]byte) string {
+	const hexdigits = "0123456789abcdef"
+	out := make([]byte, 0, 36)
+	for i, b := range id {
+		if i == 4 || i == 6 || i == 8 || i == 10 {
+			out = append(out, '-')
+		}
+		out = append(out, hexdigits[b>>4], hexdigits[b&0x0f])
+	}
+	return string(out)
 }
 
 // DefaultMeasurementConfig returns the v1 measurement parameters.

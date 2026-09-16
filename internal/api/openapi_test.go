@@ -371,6 +371,7 @@ func TestSpecErrorEnumMatchesProtocolConstants(t *testing.T) {
 		protocol.CodeUnauthorized,
 		protocol.CodeProbeDisabled,
 		protocol.CodeRateLimited,
+		protocol.CodeConfigStale,
 		protocol.CodeInternalError,
 		protocol.CodeServiceUnavailable,
 	}
@@ -402,6 +403,14 @@ func TestSpecConfigMatchesTheDispatchedConfig(t *testing.T) {
 		Content["application/json"].Example["config"]
 	if documented == nil {
 		t.Fatal("the 200 response carries no example config to compare against")
+	}
+	// The example's config_id is a concrete UUID, so it has to be the ID of the
+	// values shown beside it. A reader who copies the example and pushes it back
+	// would otherwise get a 409 for following the documentation.
+	exampleID, _ := doc.Paths["/api/v1/targets"].Get.Responses["200"].
+		Content["application/json"].Example["config_id"].(string)
+	if want := protocol.DefaultMeasurementConfig().ID(); exampleID != want {
+		t.Errorf("the example config_id is %q, but the example config hashes to %q", exampleID, want)
 	}
 
 	h := newHarness(t)
@@ -523,11 +532,15 @@ func TestSpecPushRequestSchemaIsAccepted(t *testing.T) {
 	doc := loadSpec(t)
 	schema := doc.Components.Schemas["PushRequest"]
 
-	// Every documented property, at once, in the documented nesting.
+	// Every documented property, at once, in the documented nesting. config_id
+	// carries the ID the harness is actually dispensing — the default config,
+	// since it saves none — so this also proves the happy path accepts a
+	// correct one.
 	body := map[string]any{
 		"version":       1,
 		"timestamp":     1789490000,
 		"probe_version": "0.1.0",
+		"config_id":     protocol.DefaultMeasurementConfig().ID(),
 		"results": map[string]any{
 			"aliyun_dns": map[string]any{
 				"icmp": map[string]any{

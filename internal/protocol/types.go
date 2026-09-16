@@ -34,7 +34,11 @@ type PushRequest struct {
 	Version      int
 	Timestamp    int64
 	ProbeVersion string
-	Results      Results
+	// ConfigID is the measurement config the probe measured with, as handed to
+	// it by GET /api/v1/targets. Empty for a probe that predates the field, and
+	// then no staleness check applies.
+	ConfigID string
+	Results  Results
 }
 
 // Results maps target ID to probe type to measurement.
@@ -82,6 +86,7 @@ type rawRequest struct {
 	Version      *int                                  `json:"version"`
 	Timestamp    *int64                                `json:"timestamp"`
 	ProbeVersion *string                               `json:"probe_version"`
+	ConfigID     *string                               `json:"config_id"`
 	Results      map[string]map[string]json.RawMessage `json:"results"`
 }
 
@@ -114,6 +119,9 @@ func Decode(body []byte) (*PushRequest, error) {
 	}
 	if raw.ProbeVersion != nil {
 		req.ProbeVersion = *raw.ProbeVersion
+	}
+	if raw.ConfigID != nil {
+		req.ConfigID = *raw.ConfigID
 	}
 
 	for target, byType := range raw.Results {

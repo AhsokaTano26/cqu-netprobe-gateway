@@ -155,7 +155,10 @@ func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 6. Validate against the current allowlist.
+	// 6. Validate against the current allowlist and the config the gateway is
+	// dispensing right now. A probe that measured with an older config is
+	// answered 409 config_stale so it knows to fetch the new one, rather than
+	// having its payload judged against parameters it never received.
 	allowlist, err := s.store.Allowlist()
 	if err != nil {
 		s.logger.Error("failed to load target allowlist", "error", err)
@@ -163,7 +166,14 @@ func (s *Server) handlePush(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, protocol.CodeServiceUnavailable, msgUnavailable)
 		return
 	}
-	if err := req.Validate(allowlist); err != nil {
+	config, _, err := s.store.MeasurementConfig()
+	if err != nil {
+		s.logger.Error("failed to read measurement config", "error", err)
+		s.reject(protocol.CodeInternalError, probe.ProbeID)
+		writeError(w, http.StatusServiceUnavailable, protocol.CodeServiceUnavailable, msgUnavailable)
+		return
+	}
+	if err := req.Validate(allowlist, config.ID()); err != nil {
 		s.writeProtocolError(w, err, probe.ProbeID)
 		return
 	}

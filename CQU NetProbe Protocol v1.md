@@ -126,6 +126,7 @@ v1 请求结构固定如下：
   "version": 1,
   "timestamp": 1789490000,
   "probe_version": "0.1.0",
+  "config_id": "23ea604f-6e47-5710-bc10-ab9b6a1302a3",
   "results": {
     "aliyun_dns": {
       "icmp": {
@@ -257,6 +258,44 @@ Semantic Versioning
 不得将 `probe_version` 作为高基数 Prometheus Label 使用。
 
 ---
+
+## config_id
+
+类型：
+
+```text
+string
+```
+
+长度上限：
+
+```text
+64 bytes
+```
+
+含义：
+
+探针本轮测量所使用的测量参数（§32.4）的标识，原样回传 `GET /api/v1/targets`
+响应里的 `config_id`。
+
+格式为 UUID，例如：
+
+```json
+"config_id": "23ea604f-6e47-5710-bc10-ab9b6a1302a3"
+```
+
+**可选。** 不带此字段的 Push 一律接受，与本节加入前的行为完全一致——因此协议版本仍为
+`1`。探针若实现了它，管理员修改测量参数后即可被立即通知；未实现则最迟在下一次定期刷新
+时拿到新参数。
+
+带上此字段但与本机当前配置不符，整个 Push 被拒绝：
+
+```text
+409 Conflict
+config_stale
+```
+
+详见 §14.1。探针发现对不上时应当立刻重新拉取目标列表，不要在同一个测量周期内重试。
 
 ## results
 
@@ -702,6 +741,59 @@ Probe 收到：
 204
 ```
 
+只有 `204` 才是接受。`4xx` 与 `5xx` 都表示这一轮测量**没有**进入 Gateway：`last_seen` 不刷新，
+数据也不会出现在 `/metrics` 上（§23）。
+
+## 14.1 配置过期（409）
+
+Probe 在 Push 中带了 `config_id`（§6），而它与 Gateway 当前下发的配置不一致时：
+
+```http
+HTTP/1.1 409 Conflict
+Content-Type: application/json
+
+{
+  "error": {
+    "code": "config_stale",
+    "message": "measurement config is out of date; fetch the target list again"
+  }
+}
+```
+
+含义是：**管理员改了测量参数**（§32.4），而 Probe 手上还是旧的。
+
+该 Push **未被接受**：
+
+- `last_seen` 不刷新；
+- 数据不入库，也不会出现在 `/metrics` 上。
+
+这是刻意的。用旧参数测出来的值与新参数不可比——例如 ICMP 每轮次数从 5 改成 10 之后，
+`loss_ratio` 的含义就变了（同样是 20% 丢包，一个来自 5 个包、一个来自 10 个包）。把两组
+数据混进同一条时序，配置变更点在图上完全看不出来，只会让后来的人以为网络出了问题。
+
+宁可丢掉变更瞬间的那一个数据点：它换来的是一条能读懂含义的曲线。
+
+Probe 应当：
+
+```text
+1. 立刻重新拉取 GET /api/v1/targets，拿到新的 config_id 与参数
+2. 在下一轮测量中使用新参数，并带上新的 config_id
+```
+
+不应当：
+
+```text
+对同一次测量立刻重试
+```
+
+因为参数没变，重试只会再拿到一次 409，白白消耗自己的推送额度（§21）。
+
+若重新拉取失败（网络问题），继续按已知的旧列表测量、继续上报即可：Gateway 会持续返回
+409，直到 Probe 拿到新配置。这段时间内该 Probe 的数据不会被接受，`/metrics` 上会显示为
+离线——这是真实情况，不是误报。
+
+不需要 409 的探针什么都不用做：不发送 `config_id` 就不会收到它。
+
 ---
 
 # 15. Error Response
@@ -756,6 +848,9 @@ Method 不允许
 413
 Request Body 过大
 
+409
+测量配置已过期（`config_stale`，§14.1）
+
 415
 Content-Type 不支持
 
@@ -785,6 +880,7 @@ invalid_probe_type
 unauthorized
 probe_disabled
 rate_limited
+config_stale
 internal_error
 service_unavailable
 ```
@@ -978,6 +1074,8 @@ Probe enabled
 JSON 合法
 +
 协议版本合法
++
+配置未过期（若 Probe 发送了 config_id，§14.1）
 +
 全部 measurement validation 通过
 ```
@@ -1277,6 +1375,7 @@ Content-Type: application/json
     },
     "dns": { "transport": "udp", "timeout_ms": 3000 }
   },
+  "config_id": "23ea604f-6e47-5710-bc10-ab9b6a1302a3",
   "targets": [
     {
       "target_id": "aliyun_dns",
@@ -1297,6 +1396,7 @@ Content-Type: application/json
 ```text
 version        integer   本响应结构的版本，当前固定 1
 config         object    测量参数，所有 Target 共用，见 §32.4
+config_id      string    本次配置的标识，探针需在 Push 时回传，见 §32.4
 targets        array     可测量的 Target 列表，按 target_id 升序
 
 target_id      string    上报时 results 的 Key（§6）
@@ -1389,6 +1489,26 @@ dns.timeout_ms  >= 1 且 < interval_ms
 参数变更**不需要探针做任何事**：探针按 §32.7 的节奏重新拉取，拿到新值后在下一轮测量中
 生效。Gateway 不推送通知，也不要求探针重启。
 
+### config_id：让探针立刻知道配置变了
+
+`config_id` 是本次下发参数集的标识，格式为 UUID：
+
+```text
+config_id = UUIDv5(参数值)
+```
+
+**由参数值推导，而不是每次保存时生成。** 因此：
+
+- 管理员把表单原样再存一次（数值没变）→ ID 不变 → 探针不会被无谓地打断；
+- 真正改了任何一个数值 → ID 变化 → 全部探针在下一次上报时收到 `409`（§14.1），
+  于是立刻重新拉取，而不必等到下一次定期刷新。
+
+探针必须原样保存并在 Push 时回传（§6 的 `config_id`），否则拿不到这个即时通知——那是
+允许的，只是配置变更最迟要等一个刷新周期才生效。
+
+ID 不需要存储：Gateway 每次都用当前生效的那份参数重新算一遍。所以「恢复默认值」之后 ID
+自然变回默认值，数据库里也不存在可能与参数不一致的 ID 字段——少一处会不同步的状态。
+
 ## 32.5 列表内容规则
 
 Gateway **不下发**以下 Target：
@@ -1424,6 +1544,7 @@ probe_types 为空          没有任何允许的测量类型
 启动时拉取一次
 定期刷新（建议 5 分钟，具体由探针决定）
 刷新失败不得阻塞测量循环：沿用上一份已知列表继续工作
+收到 409 config_stale 时立刻刷新一次（§14.1）
 ```
 
 列表顺序稳定，探针可以直接对两次响应做 diff 来决定是否重建测量计划。`config` 也在 diff

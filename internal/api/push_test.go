@@ -926,6 +926,102 @@ func TestAuthFailureThrottleSeparatesClientsBehindATrustedProxy(t *testing.T) {
 	})
 }
 
+// bodyWithConfig is goodBody with a config_id appended.
+func bodyWithConfig(id string) string {
+	return strings.Replace(goodBody, `"results"`, `"config_id": "`+id+`", "results"`, 1)
+}
+
+// The flow this exists for: an administrator edits the measurement parameters,
+// and every probe still holding the old ones is told to come back with the new
+// set — instead of having its payload judged against rules it never received.
+func TestPushRejectsAStaleConfigAndAcceptsTheNewOne(t *testing.T) {
+	h := newHarness(t)
+
+	current := protocol.DefaultMeasurementConfig()
+	stale := current
+	stale.ICMP.Count = 10
+
+	// A probe that already has the current config is served normally.
+	rec := h.do(t, http.MethodPost, bodyWithConfig(current.ID()), "application/json", h.bearer())
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("push with the current config = %d, want 204; body = %s", rec.Code, rec.Body.String())
+	}
+
+	// The administrator changes the parameters.
+	if err := h.store.SetMeasurementConfig(stale); err != nil {
+		t.Fatalf("SetMeasurementConfig() error = %v", err)
+	}
+
+	// The same probe now holds a stale ID.
+	rec = h.do(t, http.MethodPost, bodyWithConfig(current.ID()), "application/json", h.bearer())
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("push with a stale config = %d, want 409; body = %s", rec.Code, rec.Body.String())
+	}
+	if code := errorCode(t, rec); code != protocol.CodeConfigStale {
+		t.Errorf("error code = %q, want %q", code, protocol.CodeConfigStale)
+	}
+
+	// And once it re-fetches, it is accepted again. The ID comes from the
+	// dispatch response, exactly as a probe would get it.
+	rec = h.do(t, http.MethodPost, bodyWithConfig(stale.ID()), "application/json", h.bearer())
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("push after re-fetching = %d, want 204; body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+// A rejected push must not look like an accepted one: last_seen is what the
+// whole dashboard reads, and a probe measuring with parameters the gateway no
+// longer dispatches was not accepted.
+func TestStaleConfigDoesNotRefreshLastSeen(t *testing.T) {
+	h := newHarness(t)
+
+	stale := protocol.DefaultMeasurementConfig()
+	stale.DNS.TimeoutMS = 2500
+	if err := h.store.SetMeasurementConfig(stale); err != nil {
+		t.Fatalf("SetMeasurementConfig() error = %v", err)
+	}
+
+	rec := h.do(t, http.MethodPost, bodyWithConfig(protocol.DefaultMeasurementConfig().ID()),
+		"application/json", h.bearer())
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", rec.Code)
+	}
+	if _, ok := h.latest.Get(h.probe.ProbeID); ok {
+		t.Error("a rejected push stored a measurement (Protocol v1 §23)")
+	}
+}
+
+// A probe that predates config_id sends nothing, and the gateway has no way to
+// tell it about a config it never received — so it must keep working.
+func TestPushWithoutConfigIDIsUnaffected(t *testing.T) {
+	h := newHarness(t)
+
+	custom := protocol.DefaultMeasurementConfig()
+	custom.DNS.TimeoutMS = 2500
+	if err := h.store.SetMeasurementConfig(custom); err != nil {
+		t.Fatalf("SetMeasurementConfig() error = %v", err)
+	}
+
+	rec := h.do(t, http.MethodPost, goodBody, "application/json", h.bearer())
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("a probe without config_id = %d, want 204; body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+// errorCode pulls error.code out of an error response.
+func errorCode(t *testing.T, rec *httptest.ResponseRecorder) string {
+	t.Helper()
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("error response is not valid JSON: %v (%s)", err, rec.Body.String())
+	}
+	return body.Error.Code
+}
+
 func TestTargetsSharesTheAuthFailureThrottle(t *testing.T) {
 	h := newHarness(t)
 	guessed, err := token.Generate()

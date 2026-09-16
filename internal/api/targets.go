@@ -22,8 +22,11 @@ type targetsResponse struct {
 	// parameters have one definition instead of one per probe build. It is
 	// constant across targets: the gateway does not model a target that needs a
 	// different timeout.
-	Config  protocol.MeasurementConfig `json:"config"`
-	Targets []targetEntry              `json:"targets"`
+	Config protocol.MeasurementConfig `json:"config"`
+	// ConfigID identifies that parameter set. The probe echoes it on every push
+	// so the gateway can tell it, with a 409, that the config has moved on.
+	ConfigID string        `json:"config_id"`
+	Targets  []targetEntry `json:"targets"`
 }
 
 type targetEntry struct {
@@ -86,9 +89,10 @@ func (s *Server) handleTargets(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(targetsResponse{
-		Version: targetsVersion,
-		Config:  config,
-		Targets: entries,
+		Version:  targetsVersion,
+		Config:   config,
+		ConfigID: config.ID(),
+		Targets:  entries,
 	})
 
 	s.logger.Debug("served target list", "probe_id", probe.ProbeID,
