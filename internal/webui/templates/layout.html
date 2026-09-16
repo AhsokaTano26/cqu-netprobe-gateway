@@ -4,12 +4,21 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Title}} · CQU NetProbe Gateway</title>
+<link rel="icon" href="/static/logo.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/app.js" defer></script>
 </head>
 <body>
 <header class="topbar">
-  <span class="brand">CQU NetProbe Gateway</span>
+  {{/* The brand goes to whichever home this visitor has. Sending a signed-in
+       administrator to "/" would drop them on the public registration form,
+       which renders the layout without the nav — a dead end. */}}
+  <a class="brand" href="{{if .Username}}/admin{{else}}/{{end}}">
+    {{/* Decorative: the name beside it is the link text, so the image carries no
+         alt — a screen reader announcing both would say it twice. */}}
+    <img class="brand-logo" src="/static/logo.svg" alt="" aria-hidden="true">
+    <span>CQU NetProbe Gateway</span>
+  </a>
   {{if .Username}}
   <nav>
     <a href="/admin">Probes</a>

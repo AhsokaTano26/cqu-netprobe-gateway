@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -176,6 +177,27 @@ func TestEverySelectIsWrappedForTheCustomDropdown(t *testing.T) {
 	}
 	if selects == 0 {
 		t.Error("no <select> was found at all, so this test verified nothing")
+	}
+}
+
+// The layout shows a logo it also has to ship. Either half missing is a broken
+// image in the topbar of every page, which no Go test would otherwise see.
+func TestLayoutShowsTheBundledLogo(t *testing.T) {
+	layout, err := fs.ReadFile(assets, "templates/layout.html")
+	if err != nil {
+		t.Fatalf("read the embedded layout: %v", err)
+	}
+	if !contains(string(layout), `src="/static/logo.svg"`) {
+		t.Error("the layout does not show the logo")
+	}
+
+	rec := httptest.NewRecorder()
+	StaticHandler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/static/logo.svg", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /static/logo.svg = %d, want 200", rec.Code)
+	}
+	if !contains(rec.Body.String(), "<svg") {
+		t.Error("the served file is not an SVG")
 	}
 }
 
