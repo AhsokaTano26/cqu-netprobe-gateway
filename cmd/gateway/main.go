@@ -20,7 +20,9 @@ import (
 	"github.com/tano/cqu-netprobe-gateway/internal/config"
 	"github.com/tano/cqu-netprobe-gateway/internal/latest"
 	"github.com/tano/cqu-netprobe-gateway/internal/metrics"
+	"github.com/tano/cqu-netprobe-gateway/internal/portal"
 	"github.com/tano/cqu-netprobe-gateway/internal/store"
+	"github.com/tano/cqu-netprobe-gateway/internal/webui"
 )
 
 // shutdownTimeout bounds how long in-flight requests may finish.
@@ -40,6 +42,7 @@ var version = "dev"
 type Handler struct {
 	Push   http.Handler
 	Admin  *admin.Server
+	Portal *portal.Server
 	Latest *latest.Store
 	Self   *metrics.Self
 }
@@ -57,25 +60,44 @@ func buildHandler(cfg *config.Config, st *store.Store, reg prometheus.Registerer
 		Limiter: limiter,
 	})
 
+	// The portal owns the one-shot slot store, so it is built first: the admin's
+	// create and rotate flows mint into it and redirect to the portal's public
+	// /token/{slot}, which is the only token page there is.
+	portalSrv, err := portal.NewServer(portal.Deps{
+		Store:   st,
+		Config:  cfg,
+		Limiter: portal.NewRegisterLimiter(cfg.RegisterLimit, cfg.RegisterLimitBurst),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("build portal: %w", err)
+	}
+
 	adminSrv, err := admin.NewServer(admin.Deps{
 		Store:           st,
 		Config:          cfg,
 		Latest:          latestStore,
 		Limiter:         limiter,
+		OneShot:         portalSrv,
 		OnlineThreshold: cfg.OnlineThreshold,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("build admin server: %w", err)
 	}
 
-	// One mux for the public listener, so push and admin share a port while
-	// /metrics stays on its own listener (design doc §22).
+	// One mux for the public listener, so push, admin and the public portal share
+	// a port while /metrics stays on its own listener (design doc §22).
 	mux := http.NewServeMux()
 	mux.Handle("/api/v1/", push.Routes())
 	mux.Handle("/admin", adminSrv.Routes())
 	mux.Handle("/admin/", adminSrv.Routes())
+	// The shared stylesheet, served once for both UIs.
+	mux.Handle("GET /static/", webui.StaticHandler())
+	// The public registration pages, including the one-shot token display.
+	// Registered last for readability only: ServeMux prefers the more specific
+	// pattern, so this does not shadow /admin/....
+	mux.Handle("/", portalSrv.Routes())
 
-	return &Handler{Push: mux, Admin: adminSrv, Latest: latestStore, Self: self}, nil
+	return &Handler{Push: mux, Admin: adminSrv, Portal: portalSrv, Latest: latestStore, Self: self}, nil
 }
 
 // metricsHandler builds the /metrics handler from its own registry.

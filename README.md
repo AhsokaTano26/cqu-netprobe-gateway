@@ -168,6 +168,8 @@ Gateway **不做 TLS 终结**，也不做 HTTP 跳转。生产环境必须在它
 | `ONLINE_THRESHOLD` | `30s` | 在线判定与测量值 stale 判定共用的阈值。**改动即偏离 Protocol v1 §26/§27**，见下 |
 | `RATE_LIMIT` | `5s` | 每个 Probe 的请求最小间隔（令牌桶补充速率），Protocol v1 §21 推荐值 |
 | `RATE_LIMIT_BURST` | `3` | 每个 Probe 允许的突发请求数，必须 ≥ 1 |
+| `REGISTER_LIMIT` | `1h` | 公开注册页每 IP 的最小注册间隔，必须为正 |
+| `REGISTER_LIMIT_BURST` | `3` | 公开注册页每 IP 允许的突发注册数，必须 ≥ 1 |
 | `METRICS_ALLOWED_CIDRS` | 空 | 除回环外允许抓取 `/metrics` 的网段，逗号分隔。**空 = 仅回环**（失败关闭，而非放开） |
 | `LOG_LEVEL` | `info` | 日志级别，取值 `debug` \| `info` \| `warn` \| `error` |
 
@@ -187,9 +189,53 @@ Gateway **不做 TLS 终结**，也不做 HTTP 跳转。生产环境必须在它
 
 ## 7. Probe 创建与 Token 使用
 
+有两条创建路径，**都由 Gateway 签发 Token，身份信息都由 Gateway 的数据库决定**：
+管理员在管理页创建，或访客在公开页自助注册（需管理员启用后才生效）。
+
+### 7.0 先建立校区与楼栋目录
+
+两条路径都从目录里选位置，所以**先配置目录**：
+
+- `/admin/campuses` —— 校区。`code`（如 `hx`）会作为 Prometheus 的 `campus` Label
+  并进入 `probe_id`，**创建后不可修改**：改名会断裂历史 Series。显示名（如「虎溪」）
+  只用于页面，随时可改。
+- `/admin/buildings` —— 楼栋。同理 `code`（如 `sy01`）不可改。每个楼栋带一个楼栋群
+  （如「松园」），它会作为 `building_group` Label —— **请从已有分组中选择**，手打一个
+  新值会造出无法合并的 Series。
+
+删除被探针引用的校区或楼栋会被**拒绝**（409），不会级联删除；请先迁移或删除相关探针。
+
+### 7.1 管理员创建
+
 1. 用管理员账号登录 `/admin/login`。
-2. 打开 `/admin/probes/new`，填写 Probe ID、校区、楼栋群、楼栋、网络类型与描述。
-3. 提交后，Gateway 生成 Token 并 `303` 重定向到 `/admin/token/{slot}` 展示页面。
+2. 打开 `/admin/probes/new`，从下拉菜单选择校区与楼栋，填写网络类型与描述。
+3. 提交后，Gateway 生成 Token 并 `303` 重定向到 `/token/{slot}` 展示页面。
+
+### 7.2 公开自助注册
+
+访客直接访问 `GET /`（**无需登录**），选择校区、楼栋、网络类型并提交，即可拿到 Token。
+
+**自助注册的探针默认是禁用的**，这是这套流程的安全边界：
+
+- 启用前，它的 push 返回 `403 probe_disabled`；
+- 启用前，`/metrics` 上**不会出现它的任何 Series**——因此垃圾注册既进不了 Grafana，
+  也不会增加 Prometheus 的 Series 基数，只占一条数据库记录；
+- 管理员在 `/admin` 上看到「待启用」徽章，点启用后该探针才开始被接收。
+
+「待启用」与「已禁用」是两回事：前者是自助注册等待审批，后者是管理员主动关闭。
+列表上方可按 全部 / 待启用 / 在线 / 离线 / 已禁用 筛选。
+
+`POST /` 是 Gateway 上**唯一一条未认证的状态变更路由**，因此：
+
+- 按 IP 限流（`REGISTER_LIMIT` / `REGISTER_LIMIT_BURST`），超限返回 `429`；
+- 请求带 `Origin` 时校验其 host 与 `PUBLIC_BASE_URL` 一致，不符返回 `403`；
+- 提交的校区必须存在，且楼栋必须确实属于该校区，否则 `400`；
+- 目录为空时返回 `503` 并提示联系管理员，而不是 `400`。
+
+> 来源 IP **只用于限流，绝不用于判断探针身份**（Protocol v1 §30）。校园出口大量共享
+> NAT，用来源地址判断身份会在网络切换或 NAT 变化时产生错误结论。
+
+### 7.3 Token 的展示与保管
 
 **Token 只显示这一次。** 它由 32 字节 `crypto/rand` 生成，形如
 `cqu_probe_<43 个 base64url 字符>`（Protocol v1 §30 要求 ≥ 256 bit 熵）。

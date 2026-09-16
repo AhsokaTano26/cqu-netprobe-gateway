@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -286,5 +287,155 @@ func TestPushThenScrapeReflectsMeasurement(t *testing.T) {
 	metricsHandler(reg).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if !strings.Contains(rec.Body.String(), "campus_probe_icmp_rtt_seconds") {
 		t.Fatal("/metrics does not expose the pushed measurement; the collector is reading a different latest store")
+	}
+}
+
+func TestPublicMuxServesBothUIsAndNotMetrics(t *testing.T) {
+	st, err := store.Open(t.TempDir() + "/mux.db")
+	if err != nil {
+		t.Fatalf("store.Open() error = %v", err)
+	}
+	defer func() { _ = st.Close() }()
+
+	cfg := &config.Config{
+		AdminUsername: "admin", AdminPassword: "test-password-value",
+		PublicBaseURL:   "https://netprobe.example.com",
+		OnlineThreshold: 30 * time.Second, RateLimit: 5 * time.Second, RateLimitBurst: 3,
+		RegisterLimit: time.Hour, RegisterLimitBurst: 3,
+		DataDir: t.TempDir(),
+	}
+	handler, err := buildHandler(cfg, st, prometheus.NewRegistry())
+	if err != nil {
+		t.Fatalf("buildHandler() error = %v", err)
+	}
+
+	for _, tc := range []struct {
+		path string
+		want int
+	}{
+		{"/", http.StatusOK},               // the public registration form
+		{"/static/app.css", http.StatusOK}, // the shared stylesheet
+		{"/admin/login", http.StatusOK},    // the admin UI
+		{"/metrics", http.StatusNotFound},  // metrics stay on their own listener
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			handler.Push.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.path, nil))
+			if rec.Code != tc.want {
+				t.Fatalf("GET %s = %d, want %d", tc.path, rec.Code, tc.want)
+			}
+		})
+	}
+}
+
+// TestSelfRegisteredProbeEmitsNothingUntilEnabled is the end-to-end proof of the
+// guardrail this whole feature rests on: a probe registered through the public
+// page holds a real token, but until an administrator enables it the gateway
+// refuses its pushes AND contributes no series to Prometheus. If that stops
+// holding, unvetted registrations reach Grafana and inflate the series count.
+func TestSelfRegisteredProbeEmitsNothingUntilEnabled(t *testing.T) {
+	st, err := store.Open(t.TempDir() + "/pending.db")
+	if err != nil {
+		t.Fatalf("store.Open() error = %v", err)
+	}
+	defer func() { _ = st.Close() }()
+
+	cfg := &config.Config{
+		AdminUsername: "admin", AdminPassword: "test-password-value",
+		PublicBaseURL:   "https://netprobe.example.com",
+		OnlineThreshold: 30 * time.Second, RateLimit: 5 * time.Second, RateLimitBurst: 3,
+		RegisterLimit: time.Hour, RegisterLimitBurst: 3,
+		DataDir: t.TempDir(),
+	}
+	reg := prometheus.NewRegistry()
+	handler, err := buildHandler(cfg, st, reg)
+	if err != nil {
+		t.Fatalf("buildHandler() error = %v", err)
+	}
+	reg.MustRegister(metrics.NewCollector(handler.Latest, st, cfg.OnlineThreshold, handler.Self))
+
+	// A catalog must exist before anything can be registered.
+	if err := st.CreateCampus(&store.Campus{Code: "hx", Name: "虎溪"}); err != nil {
+		t.Fatalf("CreateCampus() error = %v", err)
+	}
+	if err := st.CreateBuilding(&store.Building{Code: "sy01", CampusCode: "hx",
+		BuildingGroupCode: "sy", BuildingGroupName: "松园", Name: "松园一栋"}); err != nil {
+		t.Fatalf("CreateBuilding() error = %v", err)
+	}
+
+	// 1. Register through the public page.
+	form := url.Values{"campus_code": {"hx"}, "building_code": {"sy01"}, "network_type": {"wired"}}
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	handler.Push.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("registration status = %d, want 303; body = %s", rec.Code, rec.Body.String())
+	}
+
+	// 2. The token page is public and shows a token exactly once.
+	loc := rec.Header().Get("Location")
+	tokenRec := httptest.NewRecorder()
+	handler.Push.ServeHTTP(tokenRec, httptest.NewRequest(http.MethodGet, loc, nil))
+	if tokenRec.Code != http.StatusOK {
+		t.Fatalf("token page status = %d, want 200", tokenRec.Code)
+	}
+	raw := regexp.MustCompile(`cqu_probe_[A-Za-z0-9_-]{43}`).FindString(tokenRec.Body.String())
+	if raw == "" {
+		t.Fatal("no token on the page")
+	}
+	replay := httptest.NewRecorder()
+	handler.Push.ServeHTTP(replay, httptest.NewRequest(http.MethodGet, loc, nil))
+	if replay.Code != http.StatusGone {
+		t.Fatalf("replaying the slot = %d, want 410", replay.Code)
+	}
+
+	// 3. The probe is disabled and attributed to the public page.
+	probes, err := st.ListProbes()
+	if err != nil || len(probes) != 1 {
+		t.Fatalf("ListProbes() = %v, %v; want exactly one probe", probes, err)
+	}
+	if probes[0].Enabled {
+		t.Fatal("a self-registered probe must start disabled")
+	}
+	if probes[0].CreatedVia != "public" {
+		t.Errorf("CreatedVia = %q, want public", probes[0].CreatedVia)
+	}
+	probeID := probes[0].ProbeID
+
+	body := `{"version":1,"timestamp":1,"probe_version":"1","results":{"aliyun_dns":{"icmp":{"success":true,"sent":5,"received":5,"loss_ratio":0,"min_rtt_ms":10.2,"avg_rtt_ms":12.3,"max_rtt_ms":15.8,"jitter_ms":1.4}}}}`
+	push := func() *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/push", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		r.Header.Set("Authorization", "Bearer "+raw)
+		w := httptest.NewRecorder()
+		handler.Push.ServeHTTP(w, r)
+		return w
+	}
+
+	// 4. Its token is real, but the push is refused because the probe is disabled.
+	if got := push().Code; got != http.StatusForbidden {
+		t.Fatalf("push as a pending probe = %d, want 403 probe_disabled", got)
+	}
+
+	// 5. And it contributes nothing to Prometheus.
+	scrape := func() string {
+		w := httptest.NewRecorder()
+		metricsHandler(reg).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+		return w.Body.String()
+	}
+	if s := scrape(); strings.Contains(s, probeID) {
+		t.Fatal("a probe awaiting approval is emitting series; the disabled default is not holding")
+	}
+
+	// 6. Enabling it makes it live end to end.
+	if err := st.SetProbeEnabled(probeID, true); err != nil {
+		t.Fatalf("SetProbeEnabled() error = %v", err)
+	}
+	if got := push().Code; got != http.StatusNoContent {
+		t.Fatalf("push after enabling = %d, want 204", got)
+	}
+	if s := scrape(); !strings.Contains(s, probeID) {
+		t.Fatal("an enabled probe is not emitting series")
 	}
 }
