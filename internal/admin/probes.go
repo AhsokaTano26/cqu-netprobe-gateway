@@ -145,21 +145,17 @@ func countProbeFilters(probes []store.Probe, s *Server, now time.Time) map[strin
 
 func (s *Server) handleProbeNewForm(w http.ResponseWriter, r *http.Request) {
 	sess, _ := s.sessionFromRequest(r)
-	webui.Render(w, http.StatusOK, s.templates, "probe_new.html", webui.PageData{
-		Title:    "新建 Probe",
-		Username: sess.username,
-		CSRF:     sess.csrf,
-		Pages:    map[string]any{"form": probeFormValues{networkType: "wired"}.view()},
-	})
+	s.renderProbeNew(w, sess, probeFormValues{networkType: "wired"}, "", http.StatusOK)
 }
 
-// probeFormValues is the submitted create form, retained so a validation error
-// can re-render the form without retyping.
+// probeFormValues is the submitted create form. Location is expressed as two
+// catalog codes; every name and group is resolved from the catalog, so the form
+// cannot introduce a code or a name that the catalog does not already have.
 type probeFormValues struct {
-	campusCode, campusName               string
-	buildingGroupCode, buildingGroupName string
-	buildingCode, buildingName           string
-	networkType, description             string
+	campusCode   string
+	buildingCode string
+	networkType  string
+	description  string
 }
 
 // view exposes the submitted values to the template, which reads them by form
@@ -167,70 +163,95 @@ type probeFormValues struct {
 // template engine can reach them through.
 func (v probeFormValues) view() map[string]string {
 	return map[string]string{
-		"campus_code":         v.campusCode,
-		"campus_name":         v.campusName,
-		"building_group_code": v.buildingGroupCode,
-		"building_group_name": v.buildingGroupName,
-		"building_code":       v.buildingCode,
-		"building_name":       v.buildingName,
-		"network_type":        v.networkType,
-		"description":         v.description,
+		"campus_code":   v.campusCode,
+		"building_code": v.buildingCode,
+		"network_type":  v.networkType,
+		"description":   v.description,
 	}
 }
 
 func readProbeForm(r *http.Request) probeFormValues {
 	return probeFormValues{
-		campusCode:        strings.TrimSpace(r.PostFormValue("campus_code")),
-		campusName:        strings.TrimSpace(r.PostFormValue("campus_name")),
-		buildingGroupCode: strings.TrimSpace(r.PostFormValue("building_group_code")),
-		buildingGroupName: strings.TrimSpace(r.PostFormValue("building_group_name")),
-		buildingCode:      strings.TrimSpace(r.PostFormValue("building_code")),
-		buildingName:      strings.TrimSpace(r.PostFormValue("building_name")),
-		networkType:       strings.TrimSpace(r.PostFormValue("network_type")),
-		description:       strings.TrimSpace(r.PostFormValue("description")),
+		campusCode:   strings.TrimSpace(r.PostFormValue("campus_code")),
+		buildingCode: strings.TrimSpace(r.PostFormValue("building_code")),
+		networkType:  strings.TrimSpace(r.PostFormValue("network_type")),
+		description:  strings.TrimSpace(r.PostFormValue("description")),
 	}
 }
 
-func (v probeFormValues) validate() string {
-	for _, c := range []struct{ name, value string }{
-		{"校区代号", v.campusCode},
-		{"楼栋群代号", v.buildingGroupCode},
-		{"楼栋代号", v.buildingCode},
-	} {
-		if !validCode(c.value) {
-			return c.name + "只能使用 1-16 位小写字母、数字或下划线"
+// resolveLocation turns the submitted codes into the full location a probe row
+// stores, enforcing that both exist and that the building really belongs to the
+// named campus. Without the agreement check a probe could be filed under a
+// campus it is not in — and a mismatched pair is what lets DeleteCampus destroy
+// a building a probe still points at.
+func (s *Server) resolveLocation(campusCode, buildingCode string) (*store.Campus, *store.Building, string) {
+	if !validCode(campusCode) {
+		return nil, nil, "请选择校区"
+	}
+	if !validCode(buildingCode) {
+		return nil, nil, "请选择楼栋"
+	}
+	campus, err := s.store.GetCampus(campusCode)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil, "校区不存在，请从列表中选择"
+	}
+	if err != nil {
+		return nil, nil, "无法校验校区，请稍后重试"
+	}
+	building, err := s.store.GetBuilding(buildingCode)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, nil, "楼栋不存在，请从列表中选择"
+	}
+	if err != nil {
+		return nil, nil, "无法校验楼栋，请稍后重试"
+	}
+	if building.CampusCode != campus.Code {
+		return nil, nil, "所选楼栋不属于该校区"
+	}
+	return campus, building, ""
+}
+
+// renderProbeNew renders the create form with its catalog-backed selects.
+func (s *Server) renderProbeNew(w http.ResponseWriter, sess *session, form probeFormValues, errMsg string, status int) {
+	campuses, err := s.store.ListCampuses()
+	if err != nil {
+		s.logger.Error("failed to list campuses", "error", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	pages := map[string]any{"campuses": campuses, "empty": len(campuses) == 0, "form": form.view()}
+	selected := form.campusCode
+	if selected == "" && len(campuses) > 0 {
+		selected = campuses[0].Code
+	}
+	if selected != "" {
+		buildings, err := s.store.ListBuildingsByCampus(selected)
+		if err != nil {
+			s.logger.Error("failed to list buildings", "error", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
 		}
+		pages["buildings"] = buildings
+		pages["campus"] = selected
 	}
-	for _, c := range []struct{ name, value string }{
-		{"校区显示名", v.campusName},
-		{"楼栋群显示名", v.buildingGroupName},
-		{"楼栋显示名", v.buildingName},
-	} {
-		if c.value == "" {
-			return c.name + "不能为空"
-		}
-		if len([]rune(c.value)) > 64 {
-			return c.name + "过长"
-		}
-	}
-	if !networkTypes[v.networkType] {
-		return "网络类型必须是 wired 或 wireless"
-	}
-	if len([]rune(v.description)) > 256 {
-		return "备注过长"
-	}
-	return ""
+	webui.Render(w, status, s.templates, "probe_new.html", webui.PageData{
+		Title: "新建 Probe", Username: sess.username, CSRF: sess.csrf, Error: errMsg, Pages: pages,
+	})
 }
 
 func (s *Server) handleProbeCreate(w http.ResponseWriter, r *http.Request) {
 	sess, _ := s.sessionFromRequest(r)
 	form := readProbeForm(r)
 
-	if msg := form.validate(); msg != "" {
-		webui.Render(w, http.StatusBadRequest, s.templates, "probe_new.html", webui.PageData{
-			Title: "新建 Probe", Username: sess.username, CSRF: sess.csrf, Error: msg,
-			Pages: map[string]any{"form": form.view()},
-		})
+	campus, building, locErr := s.resolveLocation(form.campusCode, form.buildingCode)
+	if locErr == "" && len([]rune(form.description)) > 256 {
+		locErr = "备注过长"
+	}
+	if locErr == "" && !networkTypes[form.networkType] {
+		locErr = "网络类型必须是 wired 或 wireless"
+	}
+	if locErr != "" {
+		s.renderProbeNew(w, sess, form, locErr, http.StatusBadRequest)
 		return
 	}
 
@@ -243,12 +264,12 @@ func (s *Server) handleProbeCreate(w http.ResponseWriter, r *http.Request) {
 
 	probe := &store.Probe{
 		TokenHash:         token.Hash(rawToken),
-		CampusCode:        form.campusCode,
-		CampusName:        form.campusName,
-		BuildingGroupCode: form.buildingGroupCode,
-		BuildingGroupName: form.buildingGroupName,
-		BuildingCode:      form.buildingCode,
-		BuildingName:      form.buildingName,
+		CampusCode:        campus.Code,
+		CampusName:        campus.Name,
+		BuildingGroupCode: building.BuildingGroupCode,
+		BuildingGroupName: building.BuildingGroupName,
+		BuildingCode:      building.Code,
+		BuildingName:      building.Name,
 		NetworkType:       form.networkType,
 		Enabled:           true,
 		Description:       form.description,

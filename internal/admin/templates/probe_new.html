@@ -5,29 +5,27 @@
   <form method="post" action="/admin/probes/new">
     <input type="hidden" name="csrf" value="{{.CSRF}}">
 
-    <h2>校区</h2>
-    <label>代号（小写字母、数字、下划线，进入 Prometheus Label 与 Probe ID）
-      <input type="text" name="campus_code" value="{{.Pages.form.campus_code}}" placeholder="hx" required>
+    <h2>位置</h2>
+    {{if .Pages.empty}}
+      <p class="notice">
+        还没有配置校区。请先到 <a href="/admin/campuses">校区</a> 与
+        <a href="/admin/buildings">楼栋</a> 页面建立目录，再回来创建探针。
+      </p>
+    {{else}}
+    <label>校区
+      <select name="campus_code" required>
+        {{$sel := .Pages.campus}}
+        {{range .Pages.campuses}}
+          <option value="{{.Code}}" {{if eq .Code $sel}}selected{{end}}>{{.Name}} ({{.Code}})</option>
+        {{end}}
+      </select>
     </label>
-    <label>显示名
-      <input type="text" name="campus_name" value="{{.Pages.form.campus_name}}" placeholder="虎溪" required>
+    <label>楼栋
+      <select name="building_code" required>
+        {{range .Pages.buildings}}<option value="{{.Code}}">{{.Name}} ({{.Code}})</option>{{end}}
+      </select>
     </label>
-
-    <h2>楼栋群</h2>
-    <label>代号（同一群的楼栋填相同值，例如松园各栋都填 sy）
-      <input type="text" name="building_group_code" value="{{.Pages.form.building_group_code}}" placeholder="sy" required>
-    </label>
-    <label>显示名
-      <input type="text" name="building_group_name" value="{{.Pages.form.building_group_name}}" placeholder="松园" required>
-    </label>
-
-    <h2>楼栋</h2>
-    <label>代号
-      <input type="text" name="building_code" value="{{.Pages.form.building_code}}" placeholder="sy01" required>
-    </label>
-    <label>显示名
-      <input type="text" name="building_name" value="{{.Pages.form.building_name}}" placeholder="松园一栋" required>
-    </label>
+    {{end}}
 
     <h2>网络类型</h2>
     <label>类型

@@ -24,17 +24,32 @@ func csrfFrom(t *testing.T, html string) string {
 	return m[1]
 }
 
+// validProbeForm submits only catalog codes: the form no longer carries any
+// campus or building name, so every display name a probe stores is resolved
+// from the catalog inside the handler.
 func validProbeForm(csrf string) url.Values {
 	return url.Values{
-		"csrf":                {csrf},
-		"campus_code":         {"hx"},
-		"campus_name":         {"虎溪"},
-		"building_group_code": {"sy"},
-		"building_group_name": {"松园"},
-		"building_code":       {"sy01"},
-		"building_name":       {"松园一栋"},
-		"network_type":        {"wired"},
-		"description":         {"测试探针"},
+		"csrf":          {csrf},
+		"campus_code":   {"hx"},
+		"building_code": {"sy01"},
+		"network_type":  {"wired"},
+		"description":   {"测试探针"},
+	}
+}
+
+// seedProbeCatalog creates the hx/sy01 catalog rows a form-driven create
+// resolves against. The shared harness seeds no catalog on purpose, so every
+// test that creates a probe through the form brings its own location.
+func seedProbeCatalog(t *testing.T, h *adminHarness) {
+	t.Helper()
+	if err := h.store.CreateCampus(&store.Campus{Code: "hx", Name: "虎溪"}); err != nil {
+		t.Fatalf("CreateCampus(hx) error = %v", err)
+	}
+	if err := h.store.CreateBuilding(&store.Building{
+		Code: "sy01", CampusCode: "hx",
+		BuildingGroupCode: "sy", BuildingGroupName: "松园", Name: "松园一栋",
+	}); err != nil {
+		t.Fatalf("CreateBuilding(sy01) error = %v", err)
 	}
 }
 
@@ -65,6 +80,7 @@ func (h *adminHarness) createProbe(t *testing.T, cookie *http.Cookie) (id, token
 func TestProbeCreateShowsTokenOnce(t *testing.T) {
 	h := newAdminHarness(t, "test-password-value")
 	cookie := h.login(t)
+	seedProbeCatalog(t, h)
 
 	listPage := h.get(t, "/admin/probes/new", cookie)
 	csrf := csrfFrom(t, listPage.Body.String())
@@ -101,6 +117,7 @@ func TestProbeCreateShowsTokenOnce(t *testing.T) {
 func TestProbeCreateStoresHashNotPlaintext(t *testing.T) {
 	h := newAdminHarness(t, "test-password-value")
 	cookie := h.login(t)
+	seedProbeCatalog(t, h)
 
 	page := h.get(t, "/admin/probes/new", cookie)
 	csrf := csrfFrom(t, page.Body.String())
@@ -161,17 +178,22 @@ func TestProbeCreateRejectsBadNetworkType(t *testing.T) {
 	page := h.get(t, "/admin/probes/new", cookie)
 	csrf := csrfFrom(t, page.Body.String())
 
+	seedProbeCatalog(t, h)
+
 	form := validProbeForm(csrf)
 	form.Set("network_type", "satellite")
 	rec := h.post(t, "/admin/probes/new", form, cookie)
-	if rec.Code == http.StatusSeeOther {
-		t.Fatal("network_type outside the enum was accepted")
+	// The location now resolves, so the rejection is attributable to the
+	// network type and nothing else.
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400; body = %s", rec.Code, rec.Body.String())
 	}
 }
 
 func TestProbeListRendersCreatedProbe(t *testing.T) {
 	h := newAdminHarness(t, "test-password-value")
 	cookie := h.login(t)
+	seedProbeCatalog(t, h)
 	page := h.get(t, "/admin/probes/new", cookie)
 	csrf := csrfFrom(t, page.Body.String())
 	rec := h.post(t, "/admin/probes/new", validProbeForm(csrf), cookie)
@@ -193,6 +215,7 @@ func TestProbeListRendersCreatedProbe(t *testing.T) {
 func TestProbeToggle(t *testing.T) {
 	h := newAdminHarness(t, "test-password-value")
 	cookie := h.login(t)
+	seedProbeCatalog(t, h)
 	page := h.get(t, "/admin/probes/new", cookie)
 	csrf := csrfFrom(t, page.Body.String())
 	rec := h.post(t, "/admin/probes/new", validProbeForm(csrf), cookie)
@@ -224,6 +247,7 @@ func TestProbeToggle(t *testing.T) {
 func TestProbeRotateKeepsIDAndRevokesOldToken(t *testing.T) {
 	h := newAdminHarness(t, "test-password-value")
 	cookie := h.login(t)
+	seedProbeCatalog(t, h)
 	page := h.get(t, "/admin/probes/new", cookie)
 	csrf := csrfFrom(t, page.Body.String())
 	rec := h.post(t, "/admin/probes/new", validProbeForm(csrf), cookie)
@@ -258,6 +282,7 @@ func TestProbeRotateKeepsIDAndRevokesOldToken(t *testing.T) {
 func TestProbeDelete(t *testing.T) {
 	h := newAdminHarness(t, "test-password-value")
 	cookie := h.login(t)
+	seedProbeCatalog(t, h)
 	page := h.get(t, "/admin/probes/new", cookie)
 	csrf := csrfFrom(t, page.Body.String())
 	rec := h.post(t, "/admin/probes/new", validProbeForm(csrf), cookie)
@@ -310,6 +335,7 @@ func TestValidCode(t *testing.T) {
 func TestProbeTokenPageIgnoresForgedProbeIDQuery(t *testing.T) {
 	h := newAdminHarness(t, "test-password-value")
 	cookie := h.login(t)
+	seedProbeCatalog(t, h)
 	page := h.get(t, "/admin/probes/new", cookie)
 	csrf := csrfFrom(t, page.Body.String())
 	rec := h.post(t, "/admin/probes/new", validProbeForm(csrf), cookie)
@@ -343,17 +369,21 @@ func TestProbeTokenPageIgnoresForgedProbeIDQuery(t *testing.T) {
 func TestProbeValidationErrorRendersForm(t *testing.T) {
 	h := newAdminHarness(t, "test-password-value")
 	cookie := h.login(t)
+	seedProbeCatalog(t, h)
 	page := h.get(t, "/admin/probes/new", cookie)
 	csrf := csrfFrom(t, page.Body.String())
 
 	form := validProbeForm(csrf)
-	form.Set("campus_code", "HX")
+	form.Set("campus_code", "HX") // outside the code charset
+	form.Set("description", "保留这段备注")
 	rec := h.post(t, "/admin/probes/new", form, cookie)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body = %s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
-	if !strings.Contains(body, `value="HX"`) {
+	// The location is a catalog-backed select now, so the free-text field that
+	// can carry a submitted value back is the description.
+	if !strings.Contains(body, "保留这段备注") {
 		t.Error("the rejected form values were not preserved")
 	}
 	if !strings.Contains(body, `name="csrf"`) {
@@ -367,6 +397,7 @@ func TestProbeValidationErrorRendersForm(t *testing.T) {
 func TestProbeDisableAndDeleteClearInMemoryState(t *testing.T) {
 	h := newAdminHarness(t, "test-password-value")
 	cookie := h.login(t)
+	seedProbeCatalog(t, h)
 	page := h.get(t, "/admin/probes/new", cookie)
 	csrf := csrfFrom(t, page.Body.String())
 	rec := h.post(t, "/admin/probes/new", validProbeForm(csrf), cookie)
@@ -412,6 +443,7 @@ func TestProbeDisableAndDeleteClearInMemoryState(t *testing.T) {
 func TestProbeListOnlineState(t *testing.T) {
 	h := newAdminHarness(t, "test-password-value")
 	cookie := h.login(t)
+	seedProbeCatalog(t, h)
 	id, _ := h.createProbe(t, cookie)
 
 	h.latest.Put(id, protocol.Results{}, h.now.Add(-29*time.Second))
@@ -436,6 +468,7 @@ func TestProbeListOnlineState(t *testing.T) {
 func TestProbeCreateRetriesOnIDCollision(t *testing.T) {
 	h := newAdminHarness(t, "test-password-value")
 	cookie := h.login(t)
+	seedProbeCatalog(t, h)
 
 	taken := "hx-sy01-abcdef"
 	if err := h.store.CreateProbe(&store.Probe{
@@ -482,6 +515,7 @@ func TestProbeCreateRetriesOnIDCollision(t *testing.T) {
 func TestProbeDetailRendersProbe(t *testing.T) {
 	h := newAdminHarness(t, "test-password-value")
 	cookie := h.login(t)
+	seedProbeCatalog(t, h)
 	id, _ := h.createProbe(t, cookie)
 
 	rec := h.get(t, "/admin/probes/"+id, cookie)
@@ -579,5 +613,115 @@ func TestProbeListStatusFilter(t *testing.T) {
 	bogus := h.get(t, "/admin?filter=nonsense", cookie).Body.String()
 	if !strings.Contains(bogus, "hx-sy01-aaaaaa") {
 		t.Error("an unrecognised filter value should behave as all")
+	}
+}
+
+func TestProbeFormOffersCatalogOptions(t *testing.T) {
+	h := newAdminHarness(t, "test-password-value")
+	cookie := h.login(t)
+
+	if err := h.store.CreateCampus(&store.Campus{Code: "hx", Name: "虎溪"}); err != nil {
+		t.Fatalf("CreateCampus() error = %v", err)
+	}
+	if err := h.store.CreateBuilding(&store.Building{Code: "sy01", CampusCode: "hx",
+		BuildingGroupCode: "sy", BuildingGroupName: "松园", Name: "松园一栋"}); err != nil {
+		t.Fatalf("CreateBuilding() error = %v", err)
+	}
+
+	body := h.get(t, "/admin/probes/new", cookie).Body.String()
+	if !strings.Contains(body, `name="campus_code"`) || !strings.Contains(body, "<select") {
+		t.Error("the campus field is not a select backed by the catalog")
+	}
+	if !strings.Contains(body, "虎溪") {
+		t.Error("the catalog campus is not offered")
+	}
+	// Building and group must come from the catalog too, not from free text.
+	if !strings.Contains(body, `name="building_code"`) {
+		t.Error("the building field is missing")
+	}
+	if strings.Contains(body, `name="campus_name"`) {
+		t.Error("the form still asks for a free-text campus name; the catalog owns it")
+	}
+}
+
+// TestProbeCreateIgnoresSubmittedNames pins the catalog as the only source of a
+// probe's location text: a body that still carries campus_name/building_name
+// must not be able to inject one.
+func TestProbeCreateIgnoresSubmittedNames(t *testing.T) {
+	h := newAdminHarness(t, "test-password-value")
+	cookie := h.login(t)
+	seedProbeCatalog(t, h)
+	page := h.get(t, "/admin/probes/new", cookie)
+	csrf := csrfFrom(t, page.Body.String())
+
+	form := validProbeForm(csrf)
+	form.Set("campus_name", "注入的校区")
+	form.Set("building_name", "注入的楼栋")
+	form.Set("building_group_name", "注入的楼栋群")
+	rec := h.post(t, "/admin/probes/new", form, cookie)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("create status = %d, want 303; body = %s", rec.Code, rec.Body.String())
+	}
+
+	id := probeIDPattern.FindString(h.get(t, rec.Header().Get("Location"), cookie).Body.String())
+	got, err := h.store.GetProbe(id)
+	if err != nil {
+		t.Fatalf("GetProbe() error = %v", err)
+	}
+	if got.CampusName != "虎溪" || got.BuildingGroupName != "松园" || got.BuildingName != "松园一栋" {
+		t.Errorf("display names did not come from the catalog: %+v", got)
+	}
+}
+
+func TestProbeCreateRejectsLocationOutsideCatalog(t *testing.T) {
+	h := newAdminHarness(t, "test-password-value")
+	cookie := h.login(t)
+	csrf := csrfFrom(t, h.get(t, "/admin/probes/new", cookie).Body.String())
+
+	if err := h.store.CreateCampus(&store.Campus{Code: "hx", Name: "虎溪"}); err != nil {
+		t.Fatalf("CreateCampus() error = %v", err)
+	}
+	if err := h.store.CreateBuilding(&store.Building{Code: "sy01", CampusCode: "hx",
+		BuildingGroupCode: "sy", BuildingGroupName: "松园", Name: "松园一栋"}); err != nil {
+		t.Fatalf("CreateBuilding() error = %v", err)
+	}
+	if err := h.store.CreateCampus(&store.Campus{Code: "aq", Name: "A区"}); err != nil {
+		t.Fatalf("CreateCampus() error = %v", err)
+	}
+
+	form := validProbeForm(csrf)
+	form.Set("campus_code", "hx")
+	form.Set("building_code", "sy01")
+
+	// In-catalog and agreeing: accepted.
+	if rec := h.post(t, "/admin/probes/new", form, cookie); rec.Code != http.StatusSeeOther {
+		t.Fatalf("in-catalog create status = %d, want 303; body = %s", rec.Code, rec.Body.String())
+	}
+
+	cases := map[string]struct{ campus, building string }{
+		"campus not in catalog":   {"nope", "sy01"},
+		"building not in catalog": {"hx", "nope"},
+		// The pair must agree: sy01 belongs to hx, not aq.
+		"mismatched pair": {"aq", "sy01"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := validProbeForm(csrf)
+			f.Set("campus_code", tc.campus)
+			f.Set("building_code", tc.building)
+			rec := h.post(t, "/admin/probes/new", f, cookie)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400", rec.Code)
+			}
+		})
+	}
+}
+
+func TestProbeFormEmptyCatalogExplainsItself(t *testing.T) {
+	h := newAdminHarness(t, "test-password-value")
+	cookie := h.login(t)
+	body := h.get(t, "/admin/probes/new", cookie).Body.String()
+	if !strings.Contains(body, "校区") {
+		t.Error("the page does not explain that a campus must be configured first")
 	}
 }
