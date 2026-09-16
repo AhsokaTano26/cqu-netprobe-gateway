@@ -192,17 +192,33 @@ Gateway **不做 TLS 终结**，也不做 HTTP 跳转。生产环境必须在它
 - 创建 Probe 后展示的 Push Endpoint 会是错的；
 - 管理界面的 Session Cookie 不会带上 `Secure` 标志。
 
-### 5.8 发布镜像（维护者）
+### 5.8 镜像构建与发布（维护者）
 
-镜像发布到 **Docker Hub**，由 `.github/workflows/release.yml` 在推送 tag 时执行：
+`.github/workflows/ci.yml` 有两个 job：
 
-```bash
-git tag v0.2.0
-git push origin v0.2.0
+```text
+test   →  gofmt / vet / go test -race / go build        （每次 push 与 PR）
+image  →  构建并推送多架构镜像到 Docker Hub              （每次 push，且 test 通过之后）
 ```
 
-一次 tag 会推送四个 tag —— `v0.2.0`、`0.2.0`、`0.2`、`latest` —— 并同时构建
-`linux/amd64` 与 `linux/arm64`。
+**每次 push 都会产生一个新镜像**，不需要打 tag：
+
+| 触发 | 产生的 tag | 用途 |
+|---|---|---|
+| 任意分支 push | `sha-<7 位提交号>` | 精确定位到某次提交 |
+| **默认分支**（main）push | 上面那个 + `latest` | 滚动最新版，部署默认跟这个 |
+| tag push（`v0.2.0`） | 上面两个 + `v0.2.0`、`0.2.0`、`0.2` | 固定版本，长期引用 |
+
+镜像同时构建 `linux/amd64` 与 `linux/arm64`。
+
+两点行为值得注意：
+
+- **镜像只在测试通过后才推送**（`needs: test`）。测试红了就没有新镜像，注册表里不会出现
+  一个没人能复现的版本。
+- **`latest` 跟随默认分支**，不由 tag 移动。在 main 的最新提交上打 tag 时两者本来就指向
+  同一份镜像；而对旧提交补打的 tag 不会把 `latest` 往回拖——那正是固定版本号存在的意义。
+- 连续推同一个分支时，前一次运行会被取消（`concurrency`），既省时间，也避免旧的构建
+  最后完成、把 `latest` 覆盖成旧代码。
 
 需要在仓库的 **Settings → Secrets and variables → Actions** 里配置两个 secret：
 
@@ -211,12 +227,9 @@ git push origin v0.2.0
 | `DOCKERHUB_USERNAME` | Docker Hub 用户名（小写），也是镜像的命名空间 |
 | `DOCKERHUB_TOKEN` | Docker Hub **Access Token**（Account Settings → Personal access tokens），权限选 Read & Write。**不是账号密码** |
 
-若你的 Docker Hub 账号不允许自动建仓库，先手动建一个 `cqu-netprobe-gateway`。
-workflow 里镜像名写死为 `<DOCKERHUB_USERNAME>/cqu-netprobe-gateway`；fork 后改了仓库名
-的话，改 `release.yml` 里 `metadata-action` 的那一行。
-
-CI（`.github/workflows/ci.yml`）在每次 push 与 PR 上跑 gofmt / vet / `test -race` /
-build，与发布互相独立——发布**不会**等 CI 通过，打 tag 前请确认 main 是绿的。
+`cqu-netprobe-gateway` 这个仓库不需要事先创建；如果你的账号策略不允许自动建仓库，先手动
+建一个。镜像名写死为 `<DOCKERHUB_USERNAME>/cqu-netprobe-gateway`；fork 后改了仓库名的话，
+改 `ci.yml` 里 `metadata-action` 的 `images:` 那一行。
 
 ## 6. 环境变量
 
