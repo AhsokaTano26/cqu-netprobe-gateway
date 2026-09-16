@@ -2,6 +2,7 @@ package admin
 
 import (
 	"embed"
+	"errors"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -20,7 +21,6 @@ var adminPages = []string{
 	"probes.html",
 	"probe_new.html",
 	"probe_detail.html",
-	"token.html",
 	"targets.html",
 	"campuses.html",
 	"buildings.html",
@@ -51,6 +51,18 @@ type Limiter interface {
 	Remove(probeID string)
 }
 
+// OneShot mints the single-use display slot a freshly generated plaintext token
+// is shown through. It is declared here as a one-method interface so this
+// package does not import portal, exactly as Limiter keeps it out of api.
+//
+// The sink must be the portal's slot store, never a store of this package's own:
+// create and rotate redirect to the portal's public /token/{slot}, so a slot held
+// in admin's memory would be a URL that page could never redeem. One store, one
+// page, one URL — and the 60 second TTL lives with the page that enforces it.
+type OneShot interface {
+	MintTokenSlot(probeID, token string) (string, error)
+}
+
 // Deps are the admin server's collaborators.
 type Deps struct {
 	Store           *store.Store
@@ -59,6 +71,7 @@ type Deps struct {
 	Now             func() time.Time
 	Latest          *latest.Store
 	Limiter         Limiter
+	OneShot         OneShot
 	OnlineThreshold time.Duration
 }
 
@@ -69,7 +82,7 @@ type Server struct {
 	logger          *slog.Logger
 	now             func() time.Time
 	sessions        *sessionStore
-	oneShot         *oneShotStore
+	oneShot         OneShot
 	templates       webui.Templates
 	latest          *latest.Store
 	limiter         Limiter
@@ -95,6 +108,11 @@ type Server struct {
 // invalidate the password an operator already read from the logs, and would
 // leave several live passwords scattered across log files.
 func NewServer(d Deps) (*Server, error) {
+	if d.OneShot == nil {
+		// A nil sink would only surface as a panic on the first probe create,
+		// after the probe row was already written.
+		return nil, errors.New("admin: Deps.OneShot is required")
+	}
 	logger := d.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -123,7 +141,7 @@ func NewServer(d Deps) (*Server, error) {
 		logger:          logger,
 		now:             now,
 		sessions:        newSessionStore(sessionTTL, now),
-		oneShot:         newOneShotStore(oneShotTTL, now),
+		oneShot:         d.OneShot,
 		templates:       tmpl,
 		latest:          d.Latest,
 		limiter:         d.Limiter,
@@ -193,7 +211,8 @@ func (s *Server) Routes() *http.ServeMux {
 	mux.Handle("POST /admin/probes/{id}/toggle", s.requireSession(s.requireCSRF(http.HandlerFunc(s.handleProbeToggle))))
 	mux.Handle("POST /admin/probes/{id}/rotate", s.requireSession(s.requireCSRF(http.HandlerFunc(s.handleProbeRotate))))
 	mux.Handle("POST /admin/probes/{id}/delete", s.requireSession(s.requireCSRF(http.HandlerFunc(s.handleProbeDelete))))
-	mux.Handle("GET /admin/token/{slot}", s.requireSession(http.HandlerFunc(s.handleTokenShow)))
+	// There is no admin token page: create and rotate redirect to the portal's
+	// public /token/{slot}, which is the single implementation of that page.
 
 	// Target management (added by Task 18).
 	mux.Handle("GET /admin/targets", s.requireSession(http.HandlerFunc(s.handleTargetList)))

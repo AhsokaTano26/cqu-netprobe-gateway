@@ -2,7 +2,6 @@ package admin
 
 import (
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -97,79 +96,6 @@ func TestSessionDestroy(t *testing.T) {
 	}
 	// Destroying twice must not panic.
 	s.destroy(sess.id)
-}
-
-func TestOneShotTokenTakeOnce(t *testing.T) {
-	now := time.Unix(1789490000, 0).UTC()
-	o := newOneShotStore(60*time.Second, func() time.Time { return now })
-
-	slot, err := o.put("cqu_probe_secret")
-	if err != nil {
-		t.Fatalf("put() error = %v", err)
-	}
-	if len(slot) < 32 {
-		t.Errorf("slot id is only %d chars", len(slot))
-	}
-
-	got, ok := o.take(slot)
-	if !ok || got != "cqu_probe_secret" {
-		t.Fatalf("take() = %q, %v; want the token, true", got, ok)
-	}
-	// A second take must fail: this is what makes the token show-once.
-	if _, ok := o.take(slot); ok {
-		t.Fatal("take() succeeded twice; the token must be shown only once")
-	}
-}
-
-// TestOneShotTokenTakeIsAtomic is TestOneShotTokenTakeOnce's concurrent
-// counterpart. TestOneShotTokenTakeOnce only proves the sequential case, so a
-// take implemented as read -> unlock -> delete would pass it while handing the
-// plaintext token to every racing caller. Exactly one goroutine may win.
-func TestOneShotTokenTakeIsAtomic(t *testing.T) {
-	now := time.Unix(1789490000, 0).UTC()
-	o := newOneShotStore(60*time.Second, func() time.Time { return now })
-
-	slot, err := o.put("cqu_probe_secret")
-	if err != nil {
-		t.Fatalf("put() error = %v", err)
-	}
-
-	const goroutines = 32
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	winners := 0
-	start := make(chan struct{})
-
-	for i := 0; i < goroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			<-start // maximize overlap
-			if v, ok := o.take(slot); ok && v == "cqu_probe_secret" {
-				mu.Lock()
-				winners++
-				mu.Unlock()
-			}
-		}()
-	}
-	close(start)
-	wg.Wait()
-
-	if winners != 1 {
-		t.Fatalf("take() winners = %d, want exactly 1", winners)
-	}
-}
-
-func TestOneShotTokenExpires(t *testing.T) {
-	now := time.Unix(1789490000, 0).UTC()
-	current := now
-	o := newOneShotStore(60*time.Second, func() time.Time { return current })
-
-	slot, _ := o.put("cqu_probe_secret")
-	current = now.Add(61 * time.Second)
-	if _, ok := o.take(slot); ok {
-		t.Fatal("an expired slot was still redeemable")
-	}
 }
 
 func TestPasswordGeneration(t *testing.T) {

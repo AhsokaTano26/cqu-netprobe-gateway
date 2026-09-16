@@ -12,13 +12,19 @@ import (
 
 	"github.com/tano/cqu-netprobe-gateway/internal/config"
 	"github.com/tano/cqu-netprobe-gateway/internal/latest"
+	"github.com/tano/cqu-netprobe-gateway/internal/portal"
 	"github.com/tano/cqu-netprobe-gateway/internal/store"
 )
 
 type adminHarness struct {
-	server   *Server
-	store    *store.Store
-	latest   *latest.Store
+	server *Server
+	store  *store.Store
+	latest *latest.Store
+	// routes is the public listener as main builds it: the admin UI and the
+	// public portal share one mux, which is what makes the admin's redirect to
+	// /token/{slot} resolvable here. This is test-only composition of the two
+	// real servers — neither package imports the other.
+	routes   http.Handler
 	limiter  *recordingLimiter
 	now      time.Time
 	password string
@@ -60,9 +66,22 @@ func newAdminHarness(t *testing.T, adminPassword string) *adminHarness {
 
 	now := time.Unix(1789490000, 0).UTC()
 	cfg := &config.Config{
-		AdminUsername: "admin",
-		AdminPassword: adminPassword,
-		DataDir:       t.TempDir(),
+		AdminUsername:      "admin",
+		AdminPassword:      adminPassword,
+		DataDir:            t.TempDir(),
+		RegisterLimit:      time.Hour,
+		RegisterLimitBurst: 3,
+	}
+
+	// The portal is built first because the admin server mints its display slots
+	// into the portal's store — the same order main uses.
+	portalSrv, err := portal.NewServer(portal.Deps{
+		Store:   st,
+		Config:  cfg,
+		Limiter: portal.NewRegisterLimiter(cfg.RegisterLimit, cfg.RegisterLimitBurst),
+	})
+	if err != nil {
+		t.Fatalf("portal.NewServer() error = %v", err)
 	}
 
 	// OnlineThreshold is left zero on purpose: the default must be 30s.
@@ -74,10 +93,16 @@ func newAdminHarness(t *testing.T, adminPassword string) *adminHarness {
 		Now:     func() time.Time { return now },
 		Latest:  latestStore,
 		Limiter: limiter,
+		OneShot: portalSrv,
 	})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/admin", srv.Routes())
+	mux.Handle("/admin/", srv.Routes())
+	mux.Handle("/", portalSrv.Routes())
 
 	pw := adminPassword
 	if pw == "" {
@@ -85,7 +110,7 @@ func newAdminHarness(t *testing.T, adminPassword string) *adminHarness {
 	}
 	return &adminHarness{
 		server: srv, store: st, latest: latestStore, limiter: limiter,
-		now: now, password: pw,
+		routes: mux, now: now, password: pw,
 	}
 }
 
@@ -96,7 +121,7 @@ func (h *adminHarness) get(t *testing.T, path string, cookie *http.Cookie) *http
 		req.AddCookie(cookie)
 	}
 	rec := httptest.NewRecorder()
-	h.server.Routes().ServeHTTP(rec, req)
+	h.routes.ServeHTTP(rec, req)
 	return rec
 }
 
@@ -108,7 +133,7 @@ func (h *adminHarness) post(t *testing.T, path string, form url.Values, cookie *
 		req.AddCookie(cookie)
 	}
 	rec := httptest.NewRecorder()
-	h.server.Routes().ServeHTTP(rec, req)
+	h.routes.ServeHTTP(rec, req)
 	return rec
 }
 
@@ -136,7 +161,7 @@ func TestAdminRedirectsWhenUnauthenticated(t *testing.T) {
 	// Task 18 appends the target paths to these tables. The route table is
 	// method-aware, so GET and POST paths are listed separately. Logout keeps
 	// its own coverage in TestAdminLogoutInvalidatesSession.
-	for _, path := range []string{"/admin", "/admin/probes/new", "/admin/token/abc"} {
+	for _, path := range []string{"/admin", "/admin/probes/new"} {
 		t.Run("GET "+path, func(t *testing.T) {
 			rec := h.get(t, path, nil)
 			if rec.Code != http.StatusSeeOther {
@@ -243,7 +268,14 @@ func TestAdminGeneratedPasswordPersistsAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatalf("store.Open() error = %v", err)
 	}
-	srv1, err := NewServer(Deps{Store: st1, Config: cfg, Now: func() time.Time { return now }})
+	// The slot sink is irrelevant here (no probe is created), but it must be a
+	// real one: NewServer refuses a nil sink rather than panicking later.
+	portalSrv, err := portal.NewServer(portal.Deps{Store: st1, Config: cfg})
+	if err != nil {
+		t.Fatalf("portal.NewServer() error = %v", err)
+	}
+	srv1, err := NewServer(Deps{Store: st1, Config: cfg, OneShot: portalSrv,
+		Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatalf("NewServer() error = %v", err)
 	}
@@ -258,7 +290,12 @@ func TestAdminGeneratedPasswordPersistsAcrossRestart(t *testing.T) {
 		t.Fatalf("reopen error = %v", err)
 	}
 	defer func() { _ = st2.Close() }()
-	srv2, err := NewServer(Deps{Store: st2, Config: cfg, Now: func() time.Time { return now }})
+	portalSrv2, err := portal.NewServer(portal.Deps{Store: st2, Config: cfg})
+	if err != nil {
+		t.Fatalf("portal.NewServer() error = %v", err)
+	}
+	srv2, err := NewServer(Deps{Store: st2, Config: cfg, OneShot: portalSrv2,
+		Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatalf("second NewServer() error = %v", err)
 	}

@@ -90,11 +90,12 @@ func TestProbeCreateShowsTokenOnce(t *testing.T) {
 		t.Fatalf("create status = %d, want 303; body = %s", rec.Code, rec.Body.String())
 	}
 	loc := rec.Header().Get("Location")
-	if len(loc) < len("/admin/token/") {
-		t.Fatalf("Location = %q, want /admin/token/{slot}", loc)
+	if !strings.HasPrefix(loc, "/token/") {
+		t.Fatalf("Location = %q, want /token/{slot}", loc)
 	}
 
-	// First visit shows the token.
+	// First visit shows the token, on the public page: admin has no token page
+	// of its own any more, and the slot carries the probe ID server-side.
 	first := h.get(t, loc, cookie)
 	if first.Code != http.StatusOK {
 		t.Fatalf("token page status = %d, want 200", first.Code)
@@ -107,10 +108,11 @@ func TestProbeCreateShowsTokenOnce(t *testing.T) {
 		t.Fatal("token page does not contain a probe ID")
 	}
 
-	// Second visit must not: the slot was consumed.
+	// Second visit must not: the slot was consumed, and a spent slot is gone
+	// rather than rendering a page without a token.
 	second := h.get(t, loc, cookie)
-	if second.Code == http.StatusOK && regexp.MustCompile(`cqu_probe_[A-Za-z0-9_-]{43}`).MatchString(second.Body.String()) {
-		t.Fatal("token was displayed twice; it must be shown exactly once")
+	if second.Code != http.StatusGone {
+		t.Fatalf("replay status = %d, want 410", second.Code)
 	}
 }
 
@@ -260,8 +262,12 @@ func TestProbeRotateKeepsIDAndRevokesOldToken(t *testing.T) {
 	if rot.Code != http.StatusSeeOther {
 		t.Fatalf("rotate status = %d, want 303", rot.Code)
 	}
+	rotLoc := rot.Header().Get("Location")
+	if !strings.HasPrefix(rotLoc, "/token/") {
+		t.Fatalf("Location = %q, want /token/{slot}", rotLoc)
+	}
 
-	rotPage := h.get(t, rot.Header().Get("Location"), cookie)
+	rotPage := h.get(t, rotLoc, cookie)
 	newToken := regexp.MustCompile(`cqu_probe_[A-Za-z0-9_-]{43}`).FindString(rotPage.Body.String())
 	if newToken == firstToken {
 		t.Fatal("rotation produced the same token")
@@ -307,11 +313,19 @@ func TestProbeDetailNotFound(t *testing.T) {
 	}
 }
 
-func TestProbeTokenPageRequiresAuth(t *testing.T) {
+// TestAdminServesNoTokenPage pins the consolidation: the one-shot token page is
+// the portal's public /token/{slot}. Admin keeps a route for neither the page nor
+// its display, so /admin/token/... is now a plain 404 — a second implementation
+// cannot come back by accident.
+func TestAdminServesNoTokenPage(t *testing.T) {
 	h := newAdminHarness(t, "test-password-value")
-	rec := h.get(t, "/admin/token/any-slot", nil)
-	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("status = %d, want a redirect to login", rec.Code)
+	if rec := h.get(t, "/admin/token/any-slot", nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("GET /admin/token/any-slot = %d, want 404: admin must not serve a token page", rec.Code)
+	}
+	// The public page answers without any session. An unknown slot is gone
+	// (410), not a redirect to the login form.
+	if rec := h.get(t, "/token/any-slot", nil); rec.Code != http.StatusGone {
+		t.Fatalf("GET /token/any-slot = %d, want 410 without a session", rec.Code)
 	}
 }
 

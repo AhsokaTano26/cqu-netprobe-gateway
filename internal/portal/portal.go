@@ -76,11 +76,28 @@ func NewServer(d Deps) (*Server, error) {
 	}, nil
 }
 
+// MintTokenSlot stores a plaintext token in the one-shot display store and
+// returns the slot that redeems it.
+//
+// This package owns that store because it owns the page that redeems it: the
+// admin UI calls this so its create and rotate flows redirect to the single
+// public /token/{slot} instead of minting into a store of its own, which the
+// page could never read. The slot carries the probe ID server-side, so a crafted
+// URL cannot put another ID beside a real token.
+func (s *Server) MintTokenSlot(probeID, token string) (string, error) {
+	return s.oneShot.putPair(probeID, token)
+}
+
 // Routes returns the public mux.
+//
+// The form routes use the {$} anchor so they match ONLY the root path. Without
+// it, "GET /" is a subtree pattern and the portal would answer every unmatched
+// GET on the listener — /metrics, a typo'd admin path, anything — with the
+// registration form instead of a 404.
 func (s *Server) Routes() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.Handle("GET /", http.HandlerFunc(s.handleForm))
-	mux.Handle("POST /", http.HandlerFunc(s.handleRegister))
+	mux.Handle("GET /{$}", http.HandlerFunc(s.handleForm))
+	mux.Handle("POST /{$}", http.HandlerFunc(s.handleRegister))
 	mux.Handle("GET /token/{slot}", http.HandlerFunc(s.handleTokenShow))
 	return mux
 }

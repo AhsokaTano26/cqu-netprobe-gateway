@@ -302,8 +302,11 @@ func (s *Server) handleProbeCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Hand the plaintext token, and the ID it belongs to, to exactly one render.
-	slot, err := s.oneShot.putPair(probe.ProbeID, rawToken)
+	// Hand the plaintext token, and the ID it belongs to, to exactly one render
+	// of the portal's public one-shot page. That page is the only implementation:
+	// the slot carries the probe ID server-side, so no query parameter can
+	// relabel a real token.
+	slot, err := s.oneShot.MintTokenSlot(probe.ProbeID, rawToken)
 	if err != nil {
 		s.logger.Error("failed to store one-shot token", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -312,32 +315,7 @@ func (s *Server) handleProbeCreate(w http.ResponseWriter, r *http.Request) {
 	s.logger.Info("probe created", "probe_id", probe.ProbeID, "campus", probe.CampusCode,
 		"building", probe.BuildingCode, "admin", sess.username)
 
-	http.Redirect(w, r, "/admin/token/"+slot, http.StatusSeeOther)
-}
-
-func (s *Server) handleTokenShow(w http.ResponseWriter, r *http.Request) {
-	sess, _ := s.sessionFromRequest(r)
-	slot := r.PathValue("slot")
-
-	// take deletes the slot, so a refresh or a back-button finds nothing.
-	probeID, rawToken, ok := s.oneShot.takePair(slot)
-	if !ok {
-		webui.Render(w, http.StatusGone, s.templates, "token.html", webui.PageData{
-			Title: "Token 已失效", Username: sess.username, CSRF: sess.csrf,
-			Error: "该 Token 已显示过或已过期，无法再次查看。如需新凭据请轮换 Token。",
-			Pages: map[string]any{"Token": "", "ProbeID": "", "PushEndpoint": ""},
-		})
-		return
-	}
-
-	webui.Render(w, http.StatusOK, s.templates, "token.html", webui.PageData{
-		Title: "Probe Token", Username: sess.username, CSRF: sess.csrf,
-		Pages: map[string]any{
-			"Token":        rawToken,
-			"ProbeID":      probeID,
-			"PushEndpoint": strings.TrimSuffix(s.cfg.PublicBaseURL, "/") + "/api/v1/push",
-		},
-	})
+	http.Redirect(w, r, "/token/"+slot, http.StatusSeeOther)
 }
 
 func (s *Server) handleProbeDetail(w http.ResponseWriter, r *http.Request) {
@@ -418,14 +396,14 @@ func (s *Server) handleProbeRotate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slot, err := s.oneShot.putPair(id, rawToken)
+	slot, err := s.oneShot.MintTokenSlot(id, rawToken)
 	if err != nil {
 		s.logger.Error("failed to store one-shot token", "error", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	s.logger.Info("probe token rotated", "probe_id", id, "admin", sess.username)
-	http.Redirect(w, r, "/admin/token/"+slot, http.StatusSeeOther)
+	http.Redirect(w, r, "/token/"+slot, http.StatusSeeOther)
 }
 
 func (s *Server) handleProbeDelete(w http.ResponseWriter, r *http.Request) {

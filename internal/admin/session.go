@@ -14,9 +14,6 @@ import (
 // sessionTTL is the sliding idle window for an admin session.
 const sessionTTL = 12 * time.Hour
 
-// oneShotTTL bounds how long a freshly created token stays displayable.
-const oneShotTTL = 60 * time.Second
-
 // bcryptCost is the standard work factor for the admin password. This is a
 // deliberate contrast with probe tokens, which use SHA-256: the admin password
 // may be human-chosen and the login endpoint is reachable, so it needs a slow
@@ -116,78 +113,6 @@ func (s *sessionStore) evictLocked() {
 			delete(s.sessions, id)
 		}
 	}
-}
-
-// oneShotStore hands a plaintext token to exactly one page render. This is what
-// makes "the token is shown once" true rather than aspirational: the slot is
-// deleted on first read, so a refresh, a back-button, or a replay finds nothing.
-type oneShotStore struct {
-	mu    sync.Mutex
-	slots map[string]oneShot
-	ttl   time.Duration
-	now   func() time.Time
-}
-
-// oneShot is one pending render: the secret to display and the probe it belongs
-// to. The probe ID travels with the secret because the token page has to name
-// the probe it is handing a credential to, and a query parameter would let a
-// crafted link put an arbitrary ID beside a real token.
-type oneShot struct {
-	probeID string
-	value   string
-	expires time.Time
-}
-
-func newOneShotStore(ttl time.Duration, now func() time.Time) *oneShotStore {
-	return &oneShotStore{slots: make(map[string]oneShot), ttl: ttl, now: now}
-}
-
-// put stores a value and returns the slot key used to redeem it.
-func (o *oneShotStore) put(value string) (string, error) {
-	return o.putPair("", value)
-}
-
-// putPair stores a token together with its probe ID.
-func (o *oneShotStore) putPair(probeID, value string) (string, error) {
-	slot, err := randomString(32)
-	if err != nil {
-		return "", err
-	}
-	o.mu.Lock()
-	defer o.mu.Unlock()
-
-	now := o.now()
-	for k, v := range o.slots {
-		if now.After(v.expires) {
-			delete(o.slots, k)
-		}
-	}
-	o.slots[slot] = oneShot{probeID: probeID, value: value, expires: now.Add(o.ttl)}
-	return slot, nil
-}
-
-// take redeems a slot, deleting it in the same critical section so two
-// concurrent requests cannot both receive the token.
-func (o *oneShotStore) take(slot string) (string, bool) {
-	_, value, ok := o.takePair(slot)
-	return value, ok
-}
-
-// takePair redeems both halves of a slot. The delete happens in the same
-// critical section as the read, so exactly one caller can win.
-func (o *oneShotStore) takePair(slot string) (string, string, bool) {
-	o.mu.Lock()
-	defer o.mu.Unlock()
-
-	v, ok := o.slots[slot]
-	if !ok {
-		return "", "", false
-	}
-	delete(o.slots, slot)
-	if o.now().After(v.expires) {
-		return "", "", false
-	}
-	return v.probeID, v.value, true
 }
 
 // randomString returns n cryptographically random bytes, base64url encoded.
